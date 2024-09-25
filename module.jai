@@ -87,14 +87,32 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     proc_ptr := (cast(**void)proc.value_pointer).*;
     
     // TODO: we should probably have some static assert to sanity check that these correspond to the proper sizes
-    if return_type.runtime_size == {
-        case 1; assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr));
-        case 2; assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr));
-        case 4; assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr));
-        case 8; assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr));
-        case;
-            print("not yet supporting args over 8 bytes!\n");
-            return Any.{};
+    // if return_type.runtime_size == {
+    //     case 1; assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr));
+    //     case 2; assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr));
+    //     case 4; assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr));
+    //     case 8; assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr));
+    //     case;
+    //         print("not yet supporting args over 8 bytes!\n");
+    //         return Any.{};
+    // }
+    
+    // NOTE: Seems like it actually matters that we use the float and double procs here...
+    // Which is strange because it doesn't seem to matter when passing args, only when getting the return value.
+    // Need to look into this and figure out what's goin on there.
+    
+    if (cast(*Type)*return_type).* == {
+        case DCvoid     ; assign(return_value.value_pointer, dcCallVoid    (vm, xx proc_ptr));
+        // case DCbool     ; assign(return_value.value_pointer, dcCallBool    (vm, xx proc.value_pointer));
+        case DCchar     ; assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr));
+        case DCshort    ; assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr));
+        case DCint      ; assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr));
+        // case DClong     ; assign(return_value.value_pointer, dcCallLong    (vm, xx proc.value_pointer));
+        case DClonglong ; assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr));
+        case DCfloat    ; assign(return_value.value_pointer, dcCallFloat   (vm, xx proc_ptr));
+        case DCdouble   ; assign(return_value.value_pointer, dcCallDouble  (vm, xx proc_ptr));
+        case DCpointer  ; assign(return_value.value_pointer, dcCallPointer (vm, xx proc_ptr));
+        // case DCstruct       ; dcCallStruct(vm, xx ti_proc.value_pointer, s: *DCstruct, returnValue: DCpointer)
     }
     
     return return_value;
