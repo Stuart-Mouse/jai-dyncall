@@ -1,7 +1,12 @@
+/*
+    There is currently come kind of bug with the bindings generator creating a define for DC_POINTER, 
+        where its leaving the type as void* instead of translating to *void.
+    I probably need to have it strip that identifier and then just manually define it in module.jai
+*/
+
 AT_COMPILE_TIME :: true;
 
 SOURCE_PATH :: "source";
-LIB_BASE_NAME :: "dyncall";
 
 INCLUDE_FILES :: string.[
     "dyncall.h", 
@@ -15,12 +20,6 @@ INCLUDE_FILES :: string.[
     "dyncall_types.h", 
     "dyncall_value.h", 
     "dynload.h"
-];
-
-LIB_FILES :: string.[
-    "libdyncall_s.lib", 
-    "libdyncallback_s.lib", 
-    "libdynload_s.lib"
 ];
 
 #if AT_COMPILE_TIME {
@@ -107,19 +106,19 @@ generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options
         using options;
 
         array_add(*libpaths, lib_directory);
-        array_add(*libnames, "libdyncall_s");
-        array_add(*libnames, "libdyncallback_s");
-        array_add(*libnames, "libdynload_s");
+        array_add(*libnames, "dyncall_s");
+        array_add(*libnames, "dyncallback_s");
+        array_add(*libnames, "dynload_s");
         
         for INCLUDE_FILES array_add(*source_files, tprint("%/%", SOURCE_PATH, it));
         // array_add(*typedef_prefixes_to_unwrap, "stbi_");
 
 
         generate_library_declarations = false;
-        footer = tprint(FOOTER_TEMPLATE, LIB_BASE_NAME);
+        footer = tprint(FOOTER_TEMPLATE, "dyncall_s", "dyncallback_s", "dynload_s");
 
         auto_detect_enum_prefixes = true;
-        log_stripped_declarations = false;
+        log_stripped_declarations = true;
         generate_compile_time_struct_checks = false;
     }
 
@@ -130,19 +129,31 @@ generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options
 FOOTER_TEMPLATE :: #string END
 
 #if OS == .WINDOWS {
-    %1 :: #library "windows/%1";
+    %1 :: #library,no_dll "windows/%1";
+    %2 :: #library,no_dll "windows/%2";
+    %3 :: #library,no_dll "windows/%3";
 } else #if OS == .LINUX {
-    %1 :: #library "linux/%1";
+    %1 :: #library,no_dll "linux/%1";
+    %2 :: #library,no_dll "linux/%2";
+    %3 :: #library,no_dll "linux/%3";
 } else #if OS == .MACOS {
-    %1 :: #library "macos/%1";
+    %1 :: #library,no_dll "macos/%1";
+    %2 :: #library,no_dll "macos/%2";
+    %3 :: #library,no_dll "macos/%3";
 } else #if OS == .ANDROID {
     #if CPU == .X64 {
-        %1 :: #library "android/x64/%1";
+        %1 :: #library,no_dll "android/x64/%1";
+        %2 :: #library,no_dll "android/x64/%2";
+        %3 :: #library,no_dll "android/x64/%3";
     } else #if CPU == .ARM64 {
-        %1 :: #library "android/arm64/%1";
+        %1 :: #library,no_dll "android/arm64/%1";
+        %2 :: #library,no_dll "android/arm64/%2";
+        %3 :: #library,no_dll "android/arm64/%3";
     }
 } else #if OS == .PS5 {
-    %1 :: #library "ps5/%1";
+    %1 :: #library,no_dll "ps5/%1";
+    %2 :: #library,no_dll "ps5/%2";
+    %3 :: #library,no_dll "ps5/%3";
 } else {
     #assert false;
 }
