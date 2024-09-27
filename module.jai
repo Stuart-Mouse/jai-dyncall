@@ -52,6 +52,18 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 #assert(size_of(DCdouble  ) == 8);
 
 
+/*
+    TODO: 
+    
+    add option to coerce types
+        this will create temp copies of values, but should be able to keep it all on the stack
+            so long as its only for simple things like int/float/bool whatnot
+        we could possibly do it for structs with a remap_data, but that's getting very slow, and proabbyl won't be useful to almost anyone
+            just creating Jaiva script at that point...
+        
+    test with more complex data structures
+*/
+
 #import "Basic";
 
 DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
@@ -75,12 +87,6 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     // TODO: in the future, we may want to support default values on arguments?
     // we can't get the info on default argument values at runtime though it seems?
     
-    // We will definitely need better argument type checking, and we probabyl just want to implicitly conversions on integer and float parameters
-    // otherwise, we will have calls failing any time a default sized int is passing in the args...
-    
-    // but we also don't want to have to make copies of all the arguments out here just so that we can resize them appropriately...
-    // we could be very hacky about it and just allow narrowing conversions, and then just pass the same pointer as if it were the right size/signedness?
-    
     total_stack_needed: u64;
     for ti_proc.argument_types {
         if args[it_index].type != it {
@@ -96,13 +102,27 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     }
     
     // point of no return!
+    // I mean, technically we can still error after this point, but if we do, that's really not great
     
     vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
     dcMode(vm, DC_CALL_C_DEFAULT);
     dcReset(vm);
     defer dcFree(vm);
     
+    return_type_is_aggr := false;
+    
     if return_type.type == .STRUCT {
+        return_type_is_aggr = true;
+    } else if return_type.type == .ARRAY {
+        ti_array := cast(*Type_Info_Array) return_type;
+        if ti_array.array_type == .FIXED {
+            print("error: we should never get fixed array as return type!\n");
+            return Any.{};
+        }
+        return_type_is_aggr = true;
+    }
+    
+    if return_type_is_aggr {
         ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)return_type);
         print("dcBeginCallAggr(%)\n", ag);
         dcBeginCallAggr(vm, ag);
@@ -123,6 +143,9 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     for args {
         // print("pushing arg of size '%'\n", it.type.runtime_size);
         if it.type.type == {
+          case .POINTER;
+            dcArgPointer(vm, (cast(*DCpointer)(it.value_pointer)).*); print("dcArgPointer\n");
+        
           case .ENUM; #through;
           case .BOOL; #through;
           case .INTEGER;
@@ -147,17 +170,38 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
             
           case .STRUCT;
             ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)return_type);
+            if !ag  return null;
             dcArgAggr(vm, ag, it.value_pointer);
+            
+          case .ARRAY;
+            ti_array := cast(*Type_Info_Array) it.type;
+            if ti_array.array_type == {
+              case .VIEW;
+                ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+                if !ag  return null;
+                print("vp %\n", it.value_pointer);
+                dcArgAggr(vm, ag, it.value_pointer);
+                
+              case .RESIZABLE;
+                ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
+                if !ag  return null;
+                dcArgAggr(vm, ag, it.value_pointer);
+                
+              case;
+                print("error: invalid array type!\n");
+            }
         }
-        
     }
     
     // For now, we will allocate the space for the result in temp storage and the user will get back an any with the return value
+    // TODO: allow user to pass allocator to use... but maybe not in context, since temp will probably be the main goto choice
+    // also need to consider allowing user to pass a pointer for result that will be used if type is dc_aggr, maybe just by passing optional []u8? (so we can check size)
     return_value: Any;
     if return_type.runtime_size {
-        return_value = Any.{ return_type, alloc(return_type.runtime_size) };
+        return_value = Any.{ return_type, alloc(return_type.runtime_size,, temp) };
     }
     
+    // macro to help us just catch the return value directly instead of requiring a copy
     assign :: inline (dst: *void, value: $T) {
         (cast(*T)dst).* = value;
     }
@@ -165,54 +209,78 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     proc_ptr := (cast(**void)proc.value_pointer).*;
     
     if return_type.type == {
-          case .ENUM; #through;
-          case .BOOL; #through;
-          case .INTEGER;
-            if return_type.runtime_size == {
-                case 1; assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr));
-                case 2; assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr));
-                case 4; assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr));
-                case 8; assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr));
-                case;
-                    print("invalid integer size!\n");
-                    return Any.{};
-            }
-            
-          case .FLOAT;
-            if return_type.runtime_size == {
-                case 4; assign(return_value.value_pointer, dcCallFloat (vm, xx proc_ptr));
-                case 8; assign(return_value.value_pointer, dcCallDouble(vm, xx proc_ptr));
-                case;
-                    print("invalid float size!\n");
-                    return Any.{};
-            }
-            
-          case .STRUCT;
-            ag := find_DCaggr(cast(*Type_Info_Struct)return_type);
-            if !ag {
-                print("unable to find DCaggr for struct when calling proc!\n");
-            }
-            print("dcCallAggr(%)\n", ag);
-            ptr_returned := dcCallAggr(vm, xx proc_ptr, ag, xx return_value.value_pointer);
-            print("error: %\n", dcGetError(vm));
-            print("result: %\n", return_value.value_pointer);
-            print("ptr_returned: %\n", ptr_returned);
+      case .VOID;
+        print("dcCallVoid\n");
+        dcCallVoid(vm, xx proc_ptr);
+        
+      case .POINTER;
+        print("dcCallPointer\n");
+        dcCallPointer(vm, xx proc_ptr);
+        
+      case .ENUM; #through;
+      case .BOOL; #through;
+      case .INTEGER;
+        if return_type.runtime_size == {
+            case 1; 
+                print("dcCallChar\n");
+                assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr)); 
+            case 2; 
+                print("dcCallShort\n");
+                assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr)); 
+            case 4; 
+                print("dcCallInt\n");
+                assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr)); 
+            case 8; 
+                print("dcCallLongLong\n");
+                assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr)); 
+            case;
+                print("invalid integer size!\n");
+                return Any.{};
         }
+        
+      case .FLOAT;
+        if return_type.runtime_size == {
+          case 4; 
+            print("dcCallFloat\n");
+            assign(return_value.value_pointer, dcCallFloat (vm, xx proc_ptr)); 
+          case 8; 
+            print("dcCallDouble\n");
+            assign(return_value.value_pointer, dcCallDouble(vm, xx proc_ptr)); 
+           case;
+            print("invalid float size!\n");
+            return Any.{};
+        }
+        
+      case .ARRAY;
+        ti_array := cast(*Type_Info_Array) return_type;
+        if ti_array.array_type == .FIXED {
+            print("error: we should never get fixed array as return type!\n");
+            return Any.{};
+        }
+        #through;
+      
+      case .STRUCT;
+        ag := find_DCaggr(cast(*Type_Info_Struct)return_type);
+        if !ag {
+            print("unable to find DCaggr for struct when calling proc!\n");
+        }
+        print("dcCallAggr(%)\n", ag);
+        ptr_returned := dcCallAggr(vm, xx proc_ptr, ag, xx return_value.value_pointer);
+        print("error: %\n", dcGetError(vm));
+        print("result: %\n", return_value.value_pointer);
+        print("ptr_returned: %\n", ptr_returned);
+    }
         
     return return_value;
 }
 
 
 /*
-    dyncall struct objects
+    DCaggr objects
     
-    in order to prevent needing to define these structs every single time we make a call, 
-    I'm going to have one large global lookup table for this
-    would need to have a mutex for this in threaded environment
-    
-    may not actually do this if we can find a better way to push and return structs
-    I don't know why they have this ridiculous interface when presumably all they really need to know is the total size of the struct?
-    
+    We keep one big lookup table of all the aggr objects we've built, 
+        so that we don't have to re-construct them every time.
+    These get built automatically from type info.
 */
 
 DCaggr_lookup_table: [..] struct { ti: *Type_Info_Struct; ag: *DCaggr; };
@@ -248,13 +316,27 @@ make_DCaggr :: (ti: *Type_Info_Struct) -> *DCaggr {
     for ti.members {
         if it.flags & .CONSTANT  continue;
         
-        sigchar: DCsigchar;
-        arrcount: DCsize = 1;
+        sigchar  : DCsigchar = 0;
+        arrcount : DCsize    = 1;
         
-        if it.type.type == {
+        // Handle fixed-size arrays by multiplying arrcount, updating elem_type
+        elem_type := it.type;
+        while true {
+            if elem_type.type == .ARRAY {
+                ti_array := cast(*Type_Info_Array) elem_type;
+                if ti_array.array_type == .FIXED {
+                    arrcount *= cast(u64) ti_array.array_count;
+                    elem_type = ti_array.element_type;
+                    continue;
+                }
+            }
+            break;
+        }
+        
+        if elem_type.type == {
           case .ENUM; #through;
           case .INTEGER;
-            if it.type.runtime_size == {
+            if elem_type.runtime_size == {
                 case 1; sigchar = DC_SIGCHAR_CHAR;
                 case 2; sigchar = DC_SIGCHAR_SHORT;
                 case 4; sigchar = DC_SIGCHAR_INT;
@@ -262,7 +344,7 @@ make_DCaggr :: (ti: *Type_Info_Struct) -> *DCaggr {
             }
             
           case .FLOAT;
-            if it.type.runtime_size == {
+            if elem_type.runtime_size == {
                 case 4; sigchar = DC_SIGCHAR_FLOAT;
                 case 8; sigchar = DC_SIGCHAR_DOUBLE;
             }
@@ -270,25 +352,39 @@ make_DCaggr :: (ti: *Type_Info_Struct) -> *DCaggr {
           case .POINTER; 
             sigchar = DC_SIGCHAR_POINTER;
             
+          case .PROCEDURE;
+            sigchar = DC_SIGCHAR_POINTER;
+            
           case .STRUCT;
-            ti_nested := cast(*Type_Info_Struct)it.type;
+            ti_nested := cast(*Type_Info_Struct)elem_type;
             ag_nested := find_or_make_and_register_DCaggr(ti_nested);
             if !ag_nested  return null;
             
             dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)it.offset_in_bytes, 1, ag_nested);
             continue; // We don't want to run the common case below.
-            
+        
           case .ARRAY;
-            /*
-                array view and resizable array can be treated as structs
-                fixed size arrays should probably be extracted up to a condition before this switch
-                    while type is fixed array, multiply arrcount
-                    then sub element type for it.type
-            */
+            ti_array := cast(*Type_Info_Array) elem_type;
+            
+            if ti_array.array_type == {
+              case .VIEW;
+                ag_nested := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+                if !ag_nested  return null;
+                dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)it.offset_in_bytes, 1, ag_nested);
+                
+              case .RESIZABLE;
+                ag_nested := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
+                if !ag_nested  return null;
+                dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)it.offset_in_bytes, 1, ag_nested);
+                
+              case;
+                print("error: invalid array type!\n");
+            }
+            continue; // We don't want to run the common case below.
         }
         
-        print("it %\n", it);
-        assert(sigchar != 0);
+        print("it %\n", it); // debug print all struct members that we add to the dcAggr 
+        assert(sigchar != 0, "Sigchar was not assigned a value!");
         dcAggrField(ag, sigchar, cast(s32)it.offset_in_bytes, arrcount);
     }
     
