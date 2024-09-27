@@ -131,13 +131,70 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     
 */
 
-DCstruct_lookup_table: [..] struct { ti: *Type_Info_Struct; dc: *DCstruct; };
+// DCstruct_lookup_table: [..] struct { ti: *Type_Info_Struct; dc: *DCstruct; };
 
-find_DCstruct :: inline (ti: *Type_Info_Struct) -> *DCstruct {
-    for DCstruct_lookup_table  if it.ti == ti  return it.dc;
-    return null;
-}
+// find_DCstruct :: inline (ti: *Type_Info_Struct) -> *DCstruct {
+//     for DCstruct_lookup_table  if it.ti == ti  return it.dc;
+//     return null;
+// }
 
-register_DCstruct :: inline (ti: *Type_Info_Struct, dc: *DCstruct) {
-    array_add(*DCstruct_lookup_table, .{ ti, dc });
-}
+// find_or_make_and_register_DCstruct :: (ti: *Type_Info_Struct) -> *DCstruct {
+//     dc := find_DCstruct(ti);
+//     if !dc {
+//         dc = make_DCstruct(ti);
+//         register_DCstruct(ti, dc);
+//     }
+//     return dc;
+// }
+
+// register_DCstruct :: inline (ti: *Type_Info_Struct, dc: *DCstruct) {
+//     array_add(*DCstruct_lookup_table, .{ ti, dc });
+// }
+
+// make_DCstruct :: (ti: *Type_Info_Struct) -> *DCstruct {
+//     dc := dcNewStruct(ti.members.count);
+//     success := false;
+//     defer if !success dcFreeStruct(dc);
+    
+//     for ti.member.count {
+//         if it.flags & .CONSTANT  continue;
+        
+//         sigchar: DCint;
+//         arrcount: DCint = 1;
+        
+//         if it.type.type == {
+//           case .ENUM; #through;
+//           case .INTEGER;
+//             if it.type.runtime_size == {
+//                 case 1; sigchar = DC_SIGCHAR_CHAR;
+//                 case 2; sigchar = DC_SIGCHAR_SHORT;
+//                 case 4; sigchar = DC_SIGCHAR_INT;
+//                 case 8; sigchar = DC_SIGCHAR_LONGLONG;
+//             }
+            
+//           case .FLOAT;
+//             if it.type.runtime_size == {
+//                 case 4; sigchar = DC_SIGCHAR_FLOAT;
+//                 case 8; sigchar = DC_SIGCHAR_DOUBLE;
+//             }
+            
+//           case .POINTER; 
+//             sigchar = DC_SIGCHAR_POINTER;
+            
+//           case .STRUCT;
+//             ti_nested := cast(*Type_Info_Struct)it.type;
+//             dc_nested := find_or_make_and_register_DCstruct(ti_nested);
+//             if !dc_nested  return null;
+            
+            
+            
+//           case .ARRAY;
+            
+//         }
+        
+//         dcStructField(dc, sigchar, arrcount, );
+//     }
+    
+//     success = true;
+//     dcCloseStruct(dc);
+// }
