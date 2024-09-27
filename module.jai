@@ -44,12 +44,12 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 
 // some sanity checks for sizes of types
 // I suppose these may be different for 32 bit if that is added in the future
-#assert(DCchar     == s8     );
-#assert(DCshort    == s16    );
-#assert(DCint      == s32    );
-#assert(DClonglong == s64    );
-#assert(DCfloat    == float  );
-#assert(DCdouble   == float64);
+#assert(size_of(DCchar    ) == 1);
+#assert(size_of(DCshort   ) == 2);
+#assert(size_of(DCint     ) == 4);
+#assert(size_of(DClonglong) == 8);
+#assert(size_of(DCfloat   ) == 4);
+#assert(size_of(DCdouble  ) == 8);
 
 
 #import "Basic";
