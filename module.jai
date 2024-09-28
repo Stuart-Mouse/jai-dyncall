@@ -55,16 +55,66 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 /*
     TODO: 
     
+    add handling for fixed size arrays as parameters in Jai calls
+    
     add option to coerce types
         this will create temp copies of values, but should be able to keep it all on the stack
             so long as its only for simple things like int/float/bool whatnot
         we could possibly do it for structs with a remap_data, but that's getting very slow, and proabbyl won't be useful to almost anyone
             just creating Jaiva script at that point...
-        
-    test with more complex data structures
+        create array views from fixed arrays and pass those?
+            if we do an array literal then that gets passed as a fixed size array in Any
+    
 */
 
 #import "Basic";
+
+// TODO: decent function to wrap both C and Jai calls.
+// DYNAMIC_CALL :: (proc: Any, args: ..Any) -> [] Any {
+//     if (ti_proc.procedure_flags & .IS_C_CALL) {
+        
+//         return Any.[];
+//     }
+// }
+
+DYNAMIC_JAI_CALL :: (proc: Any, args: ..Any) -> [] Any {
+    if proc.type.type != .PROCEDURE  return Any.[];
+    ti_proc := cast(*Type_Info_Procedure) proc.type;
+    
+    if (ti_proc.procedure_flags & .IS_C_CALL) {
+        print("provided procedure '%' is not a C call!\n", proc);
+        return Any.[];
+    }
+    
+    total_stack_needed, ok := _check_arguments(ti_proc, ..args);
+    
+    // Begin the actual call
+    
+    vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
+    dcMode(vm, DC_CALL_C_DEFAULT);
+    dcReset(vm);
+    defer dcFree(vm);
+    
+    if !(ti_proc.procedure_flags & .HAS_NO_CONTEXT) {
+        dcArgPointer(vm, *context);
+    }
+    
+    if !_push_arguments(vm, ..args, jai_call = true)  return Any.[];
+    
+    // push pointers for return values
+    return_values := NewArray(ti_proc.return_types.count, Any,, temp);
+    
+    for ti_proc.return_types {
+        ptr := alloc(it.runtime_size,, temp);
+        dcArgPointer(vm, ptr);
+        return_values[it_index] = Any.{ it, ptr };
+    }
+    
+    proc_ptr := (cast(**void)proc.value_pointer).*;
+    dcCallVoid(vm, xx proc_ptr);
+    
+    return return_values;
+}
 
 DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     if proc.type.type != .PROCEDURE  return Any.{};
@@ -75,123 +125,45 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
         return Any.{};
     }
     
-    assert(ti_proc.return_types.count <= 1); // sanity check
-    return_type := ifx ti_proc.return_types then ti_proc.return_types[0] else type_info(void);
+    total_stack_needed, ok := _check_arguments(ti_proc, ..args);
     
-    // check that all arguments are the right type, that we have the proper number of args, and count up stack space needed
-    if ti_proc.argument_types.count != args.count {
-        print("provided incorrect number of arguments for procedure '%'!\n", proc);
-        return Any.{};
-    }
+    assert(ti_proc.return_types.count <= 1); // sanity check for c calls
     
-    // TODO: in the future, we may want to support default values on arguments?
-    // we can't get the info on default argument values at runtime though it seems?
-    
-    total_stack_needed: u64;
-    for ti_proc.argument_types {
-        if args[it_index].type != it {
-            print("provided incorrect type for argument % of procedure!\n", it_index);
-            return Any.{};
-        }
-        if it.type == .STRUCT {
-            if !find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)it) {
-                print("unable to register DCaggr for struct!\n");
-            }
-        }
-        total_stack_needed += cast(u64) it.runtime_size;
-    }
-    
-    // point of no return!
-    // I mean, technically we can still error after this point, but if we do, that's really not great
+    // Begin the actual call
     
     vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
     dcMode(vm, DC_CALL_C_DEFAULT);
     dcReset(vm);
     defer dcFree(vm);
     
-    return_type_is_aggr := false;
+    // For a C call, we need to get the return type up top and maybe start an aggr call
+    return_type := ifx ti_proc.return_types then ti_proc.return_types[0] else type_info(void);
+    // If the return type is an array type, we want to pass the struct equivalent for the array type rather than the array type itself 
+    return_type_for_aggr := return_type;
+    return_type_is_aggr  := false;
     
     if return_type.type == .STRUCT {
         return_type_is_aggr = true;
-    } else if return_type.type == .ARRAY {
+    }
+    else if return_type.type == .ARRAY {
         ti_array := cast(*Type_Info_Array) return_type;
-        if ti_array.array_type == .FIXED {
-            print("error: we should never get fixed array as return type!\n");
-            return Any.{};
+        if ti_array.array_type == {
+          case .VIEW;
+            return_type_for_aggr = type_info(Array_View_64);
+            return_type_is_aggr  = true;
+          case .RESIZABLE;
+            return_type_for_aggr = type_info(Resizable_Array);
+            return_type_is_aggr  = true;
         }
-        return_type_is_aggr = true;
     }
     
     if return_type_is_aggr {
-        ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)return_type);
+        ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)return_type_for_aggr);
         print("dcBeginCallAggr(%)\n", ag);
         dcBeginCallAggr(vm, ag);
     }
     
-    /*
-        I think the only thing we actually care about when pushing args here is the size of the argument being pushed.
-        Why there's not a more explicit way to specify that with dyncall, I don't really know.
-        It doesn't appear to matter if I use the 4 and 8 byte int dcArg procs for floats, so presumably dyncall doesn't care
-        
-        Would be really nice if we could simplify here and just switch on the size of the parameter to know which verison to call.
-        Or perhaps I should just try to investiage the source a bit more and figure out what it's doing behind the scenes
-            maybe internally they've got a more sensible interface but just decided to hide it
-        
-        Also, I figure that for structs, we can probably also just push the proper number of bytes and call it a day
-    */
-    
-    for args {
-        // print("pushing arg of size '%'\n", it.type.runtime_size);
-        if it.type.type == {
-          case .POINTER;
-            dcArgPointer(vm, (cast(*DCpointer)(it.value_pointer)).*); print("dcArgPointer\n");
-        
-          case .ENUM; #through;
-          case .BOOL; #through;
-          case .INTEGER;
-            if it.type.runtime_size == {
-                case 1; dcArgChar    (vm, (cast(*DCchar    )(it.value_pointer)).*); print("dcArgChar\n");
-                case 2; dcArgShort   (vm, (cast(*DCshort   )(it.value_pointer)).*); print("dcArgShort\n");
-                case 4; dcArgInt     (vm, (cast(*DCint     )(it.value_pointer)).*); print("dcArgInt\n");
-                case 8; dcArgLongLong(vm, (cast(*DClonglong)(it.value_pointer)).*); print("dcArgLongLong\n");
-                case;
-                    print("invalid integer size!\n");
-                    return Any.{};
-            }
-            
-          case .FLOAT;
-            if it.type.runtime_size == {
-                case 4; dcArgFloat (vm, (cast(*DCfloat )(it.value_pointer)).*); print("dcArgFloat\n");
-                case 8; dcArgDouble(vm, (cast(*DCdouble)(it.value_pointer)).*); print("dcArgDouble\n");
-                case;
-                    print("invalid float size!\n");
-                    return Any.{};
-            }
-            
-          case .STRUCT;
-            ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)return_type);
-            if !ag  return null;
-            dcArgAggr(vm, ag, it.value_pointer);
-            
-          case .ARRAY;
-            ti_array := cast(*Type_Info_Array) it.type;
-            if ti_array.array_type == {
-              case .VIEW;
-                ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
-                if !ag  return null;
-                print("vp %\n", it.value_pointer);
-                dcArgAggr(vm, ag, it.value_pointer);
-                
-              case .RESIZABLE;
-                ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
-                if !ag  return null;
-                dcArgAggr(vm, ag, it.value_pointer);
-                
-              case;
-                print("error: invalid array type!\n");
-            }
-        }
-    }
+    if !_push_arguments(vm, ..args)  return Any.{};
     
     // For now, we will allocate the space for the result in temp storage and the user will get back an any with the return value
     // TODO: allow user to pass allocator to use... but maybe not in context, since temp will probably be the main goto choice
@@ -258,20 +230,102 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
             return Any.{};
         }
         #through;
-      
+        
       case .STRUCT;
         ag := find_DCaggr(cast(*Type_Info_Struct)return_type);
         if !ag {
             print("unable to find DCaggr for struct when calling proc!\n");
         }
         print("dcCallAggr(%)\n", ag);
-        ptr_returned := dcCallAggr(vm, xx proc_ptr, ag, xx return_value.value_pointer);
+        dcCallAggr(vm, xx proc_ptr, ag, xx return_value.value_pointer);
         print("error: %\n", dcGetError(vm));
         print("result: %\n", return_value.value_pointer);
-        print("ptr_returned: %\n", ptr_returned);
     }
-        
+    
     return return_value;
+}
+
+_check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) {
+    if ti_proc.argument_types.count != args.count {
+        print("provided incorrect number of arguments for procedure!\n");
+        return 0, false;
+    }
+    
+    total_stack_needed: u64;
+    for ti_proc.argument_types {
+        if args[it_index].type != it {
+            print("provided incorrect type for argument % of procedure!\n", it_index);
+            return 0, false;
+        }
+        if it.type == .STRUCT {
+            if !find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)it) {
+                print("unable to register DCaggr for struct!\n");
+            }
+        }
+        total_stack_needed += cast(u64) it.runtime_size;
+    }
+    return total_stack_needed, true;
+}
+
+_push_arguments :: (vm: *DCCallVM, args: ..Any, jai_call := false) -> (bool) {
+    for args {
+        if it.type.type == {
+          case .POINTER;
+            dcArgPointer(vm, (cast(*DCpointer)(it.value_pointer)).*); print("dcArgPointer\n");
+            
+          case .ENUM; #through;
+          case .BOOL; #through;
+          case .INTEGER;
+            if it.type.runtime_size == {
+                case 1; dcArgChar    (vm, (cast(*DCchar    )(it.value_pointer)).*); print("dcArgChar\n");
+                case 2; dcArgShort   (vm, (cast(*DCshort   )(it.value_pointer)).*); print("dcArgShort\n");
+                case 4; dcArgInt     (vm, (cast(*DCint     )(it.value_pointer)).*); print("dcArgInt\n");
+                case 8; dcArgLongLong(vm, (cast(*DClonglong)(it.value_pointer)).*); print("dcArgLongLong\n");
+                case;
+                    print("invalid integer size!\n");
+                    return false;
+            }
+            
+          case .FLOAT;
+            if it.type.runtime_size == {
+                case 4; dcArgFloat (vm, (cast(*DCfloat )(it.value_pointer)).*); print("dcArgFloat\n");
+                case 8; dcArgDouble(vm, (cast(*DCdouble)(it.value_pointer)).*); print("dcArgDouble\n");
+                case;
+                    print("invalid float size!\n");
+                    return false;
+            }
+            
+          case .STRUCT;
+            if jai_call {
+                dcArgPointer(vm, it.value_pointer); print("dcArgPointer\n");
+            } else {
+                ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)it.type);
+                if !ag  return false;
+                dcArgAggr(vm, ag, it.value_pointer);
+            }
+            
+          case .ARRAY;
+            ti_array := cast(*Type_Info_Array) it.type;
+            if ti_array.array_type == {
+              case .VIEW;
+                ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+                if !ag  return false;
+                print("vp %\n", it.value_pointer);
+                dcArgAggr(vm, ag, it.value_pointer);
+                
+              case .RESIZABLE;
+                ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
+                if !ag  return false;
+                dcArgAggr(vm, ag, it.value_pointer);
+                
+              case;
+                // TODO: we should be able to pass fixed size arrays in Jai calls...
+                // but we don't want to store dcAggrs for random ass array types
+                print("error: invalid array type!\n");
+            }
+        }
+    }
+    return true;
 }
 
 
@@ -383,7 +437,7 @@ make_DCaggr :: (ti: *Type_Info_Struct) -> *DCaggr {
             continue; // We don't want to run the common case below.
         }
         
-        print("it %\n", it); // debug print all struct members that we add to the dcAggr 
+        // print("it %\n", it); // debug print all struct members that we add to the dcAggr 
         assert(sigchar != 0, "Sigchar was not assigned a value!");
         dcAggrField(ag, sigchar, cast(s32)it.offset_in_bytes, arrcount);
     }
