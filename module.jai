@@ -319,9 +319,14 @@ _push_arguments :: (vm: *DCCallVM, args: ..Any, jai_call := false) -> (bool) {
                 dcArgAggr(vm, ag, it.value_pointer);
                 
               case;
-                // TODO: we should be able to pass fixed size arrays in Jai calls...
-                // but we don't want to store dcAggrs for random ass array types
-                print("error: invalid array type!\n");
+                if !jai_call {
+                    print("error: invalid array type!\n");
+                    return false;
+                }
+                
+                ag := find_or_make_and_register_DCaggr(xx ti_array);
+                if !ag  return false;
+                dcArgAggr(vm, ag, it.value_pointer);
             }
         }
     }
@@ -476,6 +481,7 @@ _add_DCaggr_field :: (ag: *DCaggr, ti: *Type_Info, offset_in_bytes: int) -> bool
             ag_array := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
           case;
             print("error: invalid array type!\n");
+            return false;
         }
         
         if !ag_array  return false;
