@@ -245,6 +245,11 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     return return_value;
 }
 
+// may remove later, for now it's useful to debug the below
+type_info_to_type :: (ti: *Type_Info) -> Type {
+    return (cast(*Type)*ti).*;
+}
+
 _check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) {
     if ti_proc.argument_types.count != args.count {
         print("provided incorrect number of arguments for procedure!\n");
@@ -255,6 +260,7 @@ _check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) 
     for ti_proc.argument_types {
         if args[it_index].type != it {
             print("provided incorrect type for argument % of procedure!\n", it_index);
+            print("expected %, got %\n", type_info_to_type(it), type_info_to_type(args[it_index].type));
             return 0, false;
         }
         if it.type == .STRUCT {
