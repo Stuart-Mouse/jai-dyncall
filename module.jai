@@ -1,10 +1,57 @@
-#load "bindings.jai";
+#assert OS == .WINDOWS; 
 
-#if OS != .WINDOWS {
-    #assert false;
+#import "Basic";
+
+#load "bindings.jai";
+#load "dcaggr.jai";
+
+// set to true to log a bunch of stuff
+// this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
+DEBUG :: false; 
+
+#module_parameters () (ENABLE_EXPANDED_COERCION_CAPABILITIES := false);
+
+// ==========  Type Coercions ==========
+
+/*
+    This module provides some capabilities to perform type coercions on arguments passed to dyncall.
+    The most basic capabilites are included in coercion_minimal.jai, 
+        but if you would like to have access to more extensive and configurable coercion settings, 
+        then you can import that functionality from my Data_Packer module.
+    But of course I realize that most people will probably not want all that, 
+        so by default you only get the minimal version.
+    You also have the option to enable type coercions altogether, 
+*/
+
+ENABLE_COERCIONS : enum { DISABLED :: 0; MINIMAL; EXTENDED; } : .MINIMAL;
+
+#if ENABLE_COERCIONS == {
+  case .MINIMAL;
+    #load "coercion_minimal.jai";
+  case .EXTENDED;
+    #load "coercion.jai";
 }
 
-DEBUG :: false; // set to true to log a bunch of stuff
+// This procedure is the same for either the minimal or extended type coercion.
+// The additional parameters settings required by the extended type coercion are set in the context.
+maybe_coerce :: (dst: Any, src: Any) -> bool {
+    if src.type == dst.type {
+        memcpy(dst.value_pointer, src.value_pointer, src.type.runtime_size);
+        return true;
+    }
+    
+    #if ENABLE_COERCIONS {
+        ok := coerce(dst, src);
+        return ok;
+    } else {
+        log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", type_info_to_type(src.type), T);
+        return false;
+    }
+}
+
+// ========== Additional Bindings ==========
+
+// Some bindings which the bindings generator missed. Maybe due to being #defines for character literals?
 
 DC_SIGCHAR_VOID         :: #char "v";
 DC_SIGCHAR_BOOL         :: #char "B";
@@ -25,7 +72,7 @@ DC_SIGCHAR_STRING       :: #char "Z"; /* in theory same as 'p', but convenient t
 DC_SIGCHAR_AGGREGATE    :: #char "A"; /* aggregate (struct/union described out-of-band via DCaggr) */
 DC_SIGCHAR_ENDARG       :: #char ")";
 
-/* calling convention / mode signatures */
+/* calling convention and mode signatures */
 
 DC_SIGCHAR_CC_PREFIX           :: #char "_"; /* announces next char to be one of the below calling convention mode chars */
 DC_SIGCHAR_CC_DEFAULT          :: #char ":"; /* default calling conv (platform native) */
@@ -42,8 +89,6 @@ DC_SIGCHAR_CC_ARM_ARM          :: #char "A";
 DC_SIGCHAR_CC_ARM_THUMB        :: #char "a";
 DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 
-
-
 // some sanity checks for sizes of types
 // I suppose these may be different for 32 bit if that is added in the future
 #assert(size_of(DCchar    ) == 1);
@@ -53,23 +98,38 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 #assert(size_of(DCfloat   ) == 4);
 #assert(size_of(DCdouble  ) == 8);
 
+// custom aliases for explicitly sized numeric types
+// arguably, we don't really need these because the DC types are already typedefs of standard Jai types
+// but the ones for the procedures are actually kind of nice and it felt wierd not to do the types themselvs to match
+// maybe I will remove these in the future. I'm still somewhat considering trying to implement a different backend with libffi.
 
-/*
-    TODO: 
-    
-    add handling for fixed size arrays as parameters in Jai calls
-    
-    add option to coerce types
-        this will create temp copies of values, but should be able to keep it all on the stack
-            so long as its only for simple things like int/float/bool whatnot
-        we could possibly do it for structs with a remap_data, but that's getting very slow, and proabbyl won't be useful to almost anyone
-            just creating Jaiva script at that point...
-        create array views from fixed arrays and pass those?
-            if we do an array literal then that gets passed as a fixed size array in Any
-    
-*/
+DCint8        :: DCchar;
+DCint16       :: DCshort;
+DCint32       :: DCint;
+DCint64       :: DClonglong;
 
-#import "Basic";
+DCfloat32     :: DCfloat;
+DCfloat64     :: DCdouble;
+
+// dcArgX procedures
+dcArgInt8     :: dcArgChar;
+dcArgInt16    :: dcArgShort;
+dcArgInt32    :: dcArgInt;
+dcArgInt64    :: dcArgLongLong;
+
+dcArgFloat32  :: dcArgFloat;
+dcArgFloat64  :: dcArgDouble;
+
+// dcCallX procedures
+dcCallInt8    :: dcCallChar;
+dcCallInt16   :: dcCallShort;
+dcCallInt32   :: dcCallInt;
+dcCallInt64   :: dcCallLongLong;
+
+dcCallFloat32 :: dcCallFloat;
+dcCallFloat64 :: dcCallDouble;
+
+// ========== Real Stuff ==========
 
 // TODO: decent function to wrap both C and Jai calls.
 // DYNAMIC_CALL :: (proc: Any, args: ..Any) -> [] Any {
@@ -103,7 +163,7 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 
 
 /*
-    The setup and execution of the dyncall VM have been split up here so that one can defer calling the VM after pushin args.
+    The setup and execution of the dyncall VM have been split up here so that one can defer calling the VM after pushing args.
     I am testing this with a Go-style defer that works at function scope instead of block scope, which should be a good test.
     
     NOTE: The VM returned by setup_vm_jai will need to be freed manually!
@@ -111,6 +171,16 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
     This has me thinking that we may want to have some better data structure 
     that wraps the dyncall VM pointer and holds the procedure pointer and type info
     so that the user does not have to manage those separately.
+    
+    Doing the setup and execution of a dyncall separately comes with a lot of extra considerations.
+    And currently, I don't have anything here that accounts for those considerations.
+    The plan is that doing the Go Defer stuff will help me to develop the proper affordances, and a nice interface to do this kind of thing.
+    But at the moment, it's just 'user beware'.
+    
+    It may be problematic to even push arguments here, since we have to push the context first, and that's maybe the most complicated part of all.
+    One solution would be to create a context in temp storage or on the heap that we get a pointer to here, and then don't fill in until we execute the call.
+    But I'm not sure if that's the most elegant solution.
+    Perhaps we can smooth over some of the complications by just making a good wrapper struct around *DCCallVM.
 */
 
 setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
@@ -135,7 +205,7 @@ setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
         dcArgPointer(vm, *context);
     }
     
-    if !_push_arguments(vm, ..args, jai_call = true)  return null;
+    if !_push_arguments(vm, ti_proc.argument_types, args, jai_call = true)  return null;
     
     ok = true;
     return vm;
@@ -168,8 +238,6 @@ DYNAMIC_JAI_CALL :: inline (proc: Any, args: ..Any) -> [] Any {
     defer dcFree(vm);
     return exec_vm_jai(vm, proc, ..args);
 }
-
-
 
 
 
@@ -217,11 +285,11 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     
     if return_type_is_aggr {
         ag := find_or_make_and_register_DCaggr(return_type_for_aggr);
-        #if DEBUG log("dcBeginCallAggr(%)\n", ag);
+        // #if DEBUG { log("dcBeginCallAggr(%)\n", ag); }
         dcBeginCallAggr(vm, ag);
     }
     
-    if !_push_arguments(vm, ..args)  return Any.{};
+    if !_push_arguments(vm, ti_proc.argument_types, args)  return Any.{};
     
     // For now, we will allocate the space for the result in temp storage and the user will get back an any with the return value
     // TODO: allow user to pass allocator to use... but maybe not in context, since temp will probably be the main goto choice
@@ -230,21 +298,16 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     if return_type.runtime_size {
         return_value = Any.{ return_type, alloc(return_type.runtime_size,, temp) };
     }
-    
-    // macro to help us just catch the return value directly instead of requiring a copy
-    assign :: inline (dst: *void, value: $T) {
-        (cast(*T)dst).* = value;
-    }
-    
+
     proc_ptr := (cast(**void)proc.value_pointer).*;
     
     if return_type.type == {
       case .VOID;
-        #if DEBUG log("dcCallVoid\n");
+        // #if DEBUG { log("dcCallVoid\n"); }
         dcCallVoid(vm, xx proc_ptr);
         
       case .POINTER;
-        #if DEBUG log("dcCallPointer\n");
+        // #if DEBUG { log("dcCallPointer\n"); }
         dcCallPointer(vm, xx proc_ptr);
         
       case .ENUM; #through;
@@ -252,17 +315,17 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
       case .INTEGER;
         if return_type.runtime_size == {
             case 1; 
-                #if DEBUG log("dcCallChar\n");
-                assign(return_value.value_pointer, dcCallChar    (vm, xx proc_ptr)); 
+        //         #if DEBUG { log("dcCallInt8\n"); }
+                (cast(*DCint8 )return_value.value_pointer).* = dcCallInt8 (vm, xx proc_ptr); 
             case 2; 
-                #if DEBUG log("dcCallShort\n");
-                assign(return_value.value_pointer, dcCallShort   (vm, xx proc_ptr)); 
+        //         #if DEBUG { log("dcCallInt16\n"); }
+                (cast(*DCint16)return_value.value_pointer).* = dcCallInt16(vm, xx proc_ptr); 
             case 4; 
-                #if DEBUG log("dcCallInt\n");
-                assign(return_value.value_pointer, dcCallInt     (vm, xx proc_ptr)); 
+        //         #if DEBUG { log("dcCallInt32\n"); }
+                (cast(*DCint32)return_value.value_pointer).* = dcCallInt32(vm, xx proc_ptr); 
             case 8; 
-                #if DEBUG log("dcCallLongLong\n");
-                assign(return_value.value_pointer, dcCallLongLong(vm, xx proc_ptr)); 
+        //         #if DEBUG { log("dcCallInt64\n"); }
+                (cast(*DCint64)return_value.value_pointer).* = dcCallInt64(vm, xx proc_ptr); 
             case;
                 log("invalid integer size!\n");
                 return Any.{};
@@ -271,11 +334,11 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
       case .FLOAT;
         if return_type.runtime_size == {
           case 4; 
-            #if DEBUG log("dcCallFloat\n");
-            assign(return_value.value_pointer, dcCallFloat (vm, xx proc_ptr)); 
+        //     #if DEBUG { log("dcCallFloat32\n"); }
+            (cast(*DCfloat32)return_value.value_pointer).* = dcCallFloat32(vm, xx proc_ptr); 
           case 8; 
-            #if DEBUG log("dcCallDouble\n");
-            assign(return_value.value_pointer, dcCallDouble(vm, xx proc_ptr)); 
+        //     #if DEBUG { log("dcCallFloat64\n"); }
+            (cast(*DCfloat64)return_value.value_pointer).* = dcCallFloat64(vm, xx proc_ptr); 
            case;
             log("invalid float size!\n");
             return Any.{};
@@ -294,7 +357,7 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
         if !ag {
             log("unable to find DCaggr for struct when calling proc!\n");
         }
-        #if DEBUG log("dcCallAggr(%)\n", ag);
+        // #if DEBUG { log("dcCallAggr(%)\n", ag); }
         dcCallAggr(vm, xx proc_ptr, ag, xx return_value.value_pointer);
         log("error: %\n", dcGetError(vm));
         log("result: %\n", return_value.value_pointer);
@@ -303,6 +366,13 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     return return_value;
 }
 
+#scope_module
+
+/* 
+    IMPORTANT: I am in the process of removing this procedure, 
+    as it doesn't make sense to check and puch arguments separately 
+    now that I am introducing the type coercion stuff.
+*/
 _check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) {
     if ti_proc.argument_types.count != args.count {
         log("provided incorrect number of arguments for procedure!\n");
@@ -311,11 +381,6 @@ _check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) 
     
     total_stack_needed: u64;
     for ti_proc.argument_types {
-        if args[it_index].type != it {
-            log("provided incorrect type for argument % of procedure!\n", it_index);
-            log("expected %, got %\n", type_info_to_type(it), type_info_to_type(args[it_index].type));
-            return 0, false;
-        }
         if it.type == .STRUCT {
             if !find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)it) {
                 log("unable to register DCaggr for struct!\n");
@@ -326,55 +391,89 @@ _check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) 
     return total_stack_needed, true;
 }
 
-_push_arguments :: (vm: *DCCallVM, args: ..Any, jai_call := false) -> (bool) {
-    for args {
-        if it.type.type == {
+_push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_call := false) -> (bool) {
+    for arg_type: arg_types {
+        arg_any := args[it_index];
+        
+        if arg_type.type == {
           case .POINTER;
-            dcArgPointer(vm, (cast(*DCpointer)(it.value_pointer)).*); #if DEBUG log("dcArgPointer\n");
+        //     #if DEBUG { log("dcArgPointer\n"); }
+            dcArgPointer(vm, (cast(*DCpointer)arg_any.value_pointer).*); 
             
           case .ENUM; #through;
           case .BOOL; #through;
           case .INTEGER;
-            if it.type.runtime_size == {
-                case 1; dcArgChar    (vm, (cast(*DCchar    )(it.value_pointer)).*); #if DEBUG log("dcArgChar\n");
-                case 2; dcArgShort   (vm, (cast(*DCshort   )(it.value_pointer)).*); #if DEBUG log("dcArgShort\n");
-                case 4; dcArgInt     (vm, (cast(*DCint     )(it.value_pointer)).*); #if DEBUG log("dcArgInt\n");
-                case 8; dcArgLongLong(vm, (cast(*DClonglong)(it.value_pointer)).*); #if DEBUG log("dcArgLongLong\n");
-                case;
-                    log("invalid integer size!\n");
-                    return false;
+            if arg_type.runtime_size == {
+              case 1; 
+        //         #if DEBUG { log("dcArgInt8\n"); }
+                val: DCint8;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgInt8(vm, val); 
+                
+              case 2; 
+        //         #if DEBUG { log("dcArgInt16\n"); }
+                val: DCint16;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgInt16(vm, val); 
+                
+              case 4; 
+        //         #if DEBUG { log("dcArgInt32\n"); }
+                val: DCint32;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgInt32(vm, val); 
+                
+              case 8; 
+        //         #if DEBUG { log("dcArgInt64\n"); }
+                val: DCint64;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgInt64(vm, val); 
+                
+              case;
+                log("invalid integer size!\n");
+                return false;
             }
             
           case .FLOAT;
-            if it.type.runtime_size == {
-                case 4; dcArgFloat (vm, (cast(*DCfloat )(it.value_pointer)).*); #if DEBUG log("dcArgFloat\n");
-                case 8; dcArgDouble(vm, (cast(*DCdouble)(it.value_pointer)).*); #if DEBUG log("dcArgDouble\n");
-                case;
-                    log("invalid float size!\n");
-                    return false;
+            if arg_type.runtime_size == {
+              case 4; 
+        //         #if DEBUG { log("dcArgFloat32\n"); }
+                val: DCfloat32;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgFloat32(vm, val); 
+                
+              case 8; 
+        //         #if DEBUG { log("dcArgFloat64\n"); }
+                val: DCfloat32;
+                if !maybe_coerce(val, arg_any)  return false;
+                dcArgFloat64(vm, val); 
+                
+              case;
+                log("invalid float size!\n");
+                return false;
             }
             
           case .STRUCT;
             if jai_call {
-                dcArgPointer(vm, it.value_pointer); #if DEBUG log("dcArgPointer\n");
+        //         #if DEBUG { log("dcArgPointer\n"); }
+                dcArgPointer(vm, arg_any.value_pointer); 
             } else {
-                ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)it.type);
+                ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)arg_type);
                 if !ag  return false;
-                dcArgAggr(vm, ag, it.value_pointer);
+                dcArgAggr(vm, ag, arg_any.value_pointer);
             }
             
           case .ARRAY;
-            ti_array := cast(*Type_Info_Array) it.type;
+            ti_array := cast(*Type_Info_Array) arg_type;
             if ti_array.array_type == {
               case .VIEW;
                 ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
                 if !ag  return false;
-                dcArgAggr(vm, ag, it.value_pointer);
+                dcArgAggr(vm, ag, arg_any.value_pointer);
                 
               case .RESIZABLE;
                 ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
                 if !ag  return false;
-                dcArgAggr(vm, ag, it.value_pointer);
+                dcArgAggr(vm, ag, arg_any.value_pointer);
                 
               case;
                 if !jai_call {
@@ -384,179 +483,21 @@ _push_arguments :: (vm: *DCCallVM, args: ..Any, jai_call := false) -> (bool) {
                 
                 ag := find_or_make_and_register_DCaggr(xx ti_array);
                 if !ag  return false;
-                dcArgAggr(vm, ag, it.value_pointer);
+                dcArgAggr(vm, ag, arg_any.value_pointer);
             }
         }
     }
+    
     return true;
 }
 
 
-/*
-    DCaggr objects
-    
-    We keep one big lookup table of all the aggr objects we've built, 
-        so that we don't have to re-construct them every time.
-    These get built automatically from type info.
-*/
 
-DCaggr_lookup_table: [..] struct { ti: *Type_Info; ag: *DCaggr; };
 
-find_DCaggr :: inline (ti: *Type_Info) -> *DCaggr {
-    for DCaggr_lookup_table  if it.ti == ti  return it.ag;
-    return null;
-}
 
-find_or_make_and_register_DCaggr :: (ti: *Type_Info) -> *DCaggr {
-    ag := find_DCaggr(ti);
-    if !ag {
-        ag = make_DCaggr(ti);
-        #if DEBUG log("created new DCaggr object @ %\n", ag);
-        register_DCaggr(ti, ag);
-    }
-    return ag;
-}
-
-register_DCaggr :: inline (ti: *Type_Info, ag: *DCaggr) {
-    if !ti || !ag {
-        log("attempted to register invalid DCaggr\n");
-        return;
-    }
-    array_add(*DCaggr_lookup_table, .{ ti, ag });
-}
-
-make_DCaggr :: (ti: *Type_Info) -> *DCaggr {
-    if ti.type == {
-      case .ARRAY;
-        ti_array := cast(*Type_Info_Array) ti;
-        if ti_array.array_type == .FIXED {
-            return _make_DCaggr_array(cast(*Type_Info_Array)ti);
-        }
-      case .STRUCT;
-        return _make_DCaggr_struct(cast(*Type_Info_Struct)ti);
-    }
-    log("Invalid type given in make_DCaggr()!\n");
-    return null;
-}
-
-/*
-    In general, we want to avoid making DCaggr objects for fixed array types.
-    We could avoid this altogether if only supporting the C calling convention, but Jai allows for passing fixed size arrays, 
-        and I want to be feature complete here even if it means having some less than ideal code.
-    If fixed arrays are within a struct, then we don't need to call into this proc because we can pass an array count.
-    But if the array is the top-level type so-to-speak, then we need to make a DCaggr for it.
-    Maybe in the future I can come up with some better way to minimize the need for this further...
-*/
-_make_DCaggr_array :: (ti: *Type_Info_Array) -> *DCaggr {
-    ag := dcNewAggr(cast(u64)ti.array_count, cast(u64)ti.runtime_size);
-    success := false;
-    defer if !success dcFreeAggr(ag);
-    
-    // basically a DCaggr struct, but with only one member (the fixed size array)
-    if !_add_DCaggr_field(ag, ti, 0)  return null;
-    
-    dcCloseAggr(ag);
-    success = true;
-    return ag;
-}
-
-_make_DCaggr_struct :: (ti: *Type_Info_Struct) -> *DCaggr {
-    ag := dcNewAggr(cast(u64)ti.members.count, cast(u64)ti.runtime_size);
-    success := false;
-    defer if !success dcFreeAggr(ag);
-    
-    last_offset := 0; // hacky fix to skip adding fields with #place directives, as dyncall doesn't seem to like overlapping fields in a struct definition (reasonably so)
-    for ti.members {
-        if it.flags & .CONSTANT  continue;
-        if it.offset_in_bytes < last_offset  continue; 
-        
-        if !_add_DCaggr_field(ag, it.type, it.offset_in_bytes)  return null;
-        
-        last_offset = it.offset_in_bytes + it.type.runtime_size;
-    }
-    
-    dcCloseAggr(ag);
-    success = true;
-    return ag;
-}
-
-_add_DCaggr_field :: (ag: *DCaggr, ti: *Type_Info, offset_in_bytes: int) -> bool {
-    sigchar  : DCsigchar = 0;
-    arrcount : DCsize    = 1;
-    
-    // Handle fixed-size arrays by multiplying arrcount, updating elem_type
-    elem_type := ti;
-    while true {
-        if elem_type.type == .ARRAY {
-            ti_array := cast(*Type_Info_Array) elem_type;
-            if ti_array.array_type == .FIXED {
-                arrcount *= cast(u64) ti_array.array_count;
-                elem_type = ti_array.element_type;
-                continue;
-            }
-        }
-        break;
-    }
-    
-    if elem_type.type == {
-      case .ENUM; #through;
-      case .INTEGER;
-        if elem_type.runtime_size == {
-            case 1; sigchar = DC_SIGCHAR_CHAR;
-            case 2; sigchar = DC_SIGCHAR_SHORT;
-            case 4; sigchar = DC_SIGCHAR_INT;
-            case 8; sigchar = DC_SIGCHAR_LONGLONG;
-        }
-        
-      case .FLOAT;
-        if elem_type.runtime_size == {
-            case 4; sigchar = DC_SIGCHAR_FLOAT;
-            case 8; sigchar = DC_SIGCHAR_DOUBLE;
-        }
-        
-      case .POINTER; 
-        sigchar = DC_SIGCHAR_POINTER;
-        
-      case .PROCEDURE;
-        sigchar = DC_SIGCHAR_POINTER;
-        
-      case .STRUCT;
-        ti_nested := cast(*Type_Info_Struct)elem_type;
-        ag_nested := find_or_make_and_register_DCaggr(ti_nested);
-        if !ag_nested  return false;
-        
-        dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_nested);
-        return true; // We don't want to run the common case below.
-        
-      case .ARRAY;
-        ti_array := cast(*Type_Info_Array) elem_type;
-        
-        ag_array: *DCaggr;
-        if ti_array.array_type == {
-          case .VIEW;
-            ag_array := find_or_make_and_register_DCaggr(type_info(Array_View_64));
-          case .RESIZABLE;
-            ag_array := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
-          case;
-            log("error: invalid array type!\n");
-            return false;
-        }
-        
-        if !ag_array  return false;
-        dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_array);
-        return true; // We don't want to run the common case below.
-    }
-    
-    // Common case for primitive types, no need to duplicate the call up in each case.
-    assert(sigchar != 0, "Sigchar was not assigned a value!");
-    dcAggrField(ag, sigchar, cast(s32)offset_in_bytes, arrcount);
-    return true;
-}
-
-#scope_file
-
+// TODO: maybe move this to some utils file if we do keep it around
 // may remove later, for now it's useful to debug the below
-type_info_to_type :: (ti: *Type_Info) -> Type {
+type_info_to_type :: inline (ti: *Type_Info) -> Type {
     return (cast(*Type)*ti).*;
 }
 
