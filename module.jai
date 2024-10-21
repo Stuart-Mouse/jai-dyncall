@@ -41,8 +41,7 @@ maybe_coerce :: (dst: Any, src: Any) -> bool {
     }
     
     #if ENABLE_COERCIONS {
-        ok := coerce(dst, src);
-        return ok;
+        return coerce(dst, src);
     } else {
         log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", type_info_to_type(src.type), T);
         return false;
