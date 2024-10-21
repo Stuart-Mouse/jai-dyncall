@@ -213,7 +213,7 @@ setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
 
 // We just assume that this will never fail right now. 
 // Only error we could have is memory allocation, or logic error because vm was not setup correctly. But that will probably just cause a crash anyhow, so I won't bother :)
-exec_vm_jai :: (vm: *DCCallVM, proc: Any, args: ..Any) -> [] Any {
+exec_vm_jai :: (vm: *DCCallVM, proc: Any, args: ..Any) -> ([] Any, bool) {
     assert(proc.type.type == .PROCEDURE, "proc.type.type was %!", proc.type.type);
     ti_proc := cast(*Type_Info_Procedure) proc.type;
     
@@ -229,14 +229,16 @@ exec_vm_jai :: (vm: *DCCallVM, proc: Any, args: ..Any) -> [] Any {
     proc_ptr := (cast(**void)proc.value_pointer).*;
     dcCallVoid(vm, xx proc_ptr);
     
-    return return_values;
+    return return_values, true;
 }
 
-DYNAMIC_JAI_CALL :: inline (proc: Any, args: ..Any) -> [] Any {
+DYNAMIC_JAI_CALL :: inline (proc: Any, args: ..Any) -> ([] Any, bool) {
     vm := setup_vm_jai(proc, ..args);
-    if !vm  return Any.[];
+    if !vm  return Any.[], false;
     defer dcFree(vm);
-    return exec_vm_jai(vm, proc, ..args);
+    
+    ret, ok := exec_vm_jai(vm, proc, ..args);
+    return ret, ok;
 }
 
 
@@ -496,7 +498,6 @@ _push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_cal
 
 
 // TODO: maybe move this to some utils file if we do keep it around
-// may remove later, for now it's useful to debug the below
 type_info_to_type :: inline (ti: *Type_Info) -> Type {
     return (cast(*Type)*ti).*;
 }

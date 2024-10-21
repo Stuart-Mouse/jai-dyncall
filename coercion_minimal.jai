@@ -22,20 +22,13 @@ coerce :: (dst: Any, src: Any) -> bool {
     
     if dst.type.type == {
       case .INTEGER;
-        ti_src := cast(*Type_Info_Integer) src.type;
-        ti_dst := cast(*Type_Info_Integer) dst.type;
+        src_ti := cast(*Type_Info_Integer) src.type;
+        dst_ti := cast(*Type_Info_Integer) dst.type;
         
-        if !ALLOW_NARROWING_COERCIONS {
-            if ti_src.runtime_size > ti_dst.runtime_size  return false;
-            if ti_src.signed {
-                if !it_dst.signed  return false;
-            } else {
-                if it_dst.signed && ti_src.runtime_size = ti_dst.runtime_size  return false;
-            }
-        }
-    
+        if !ALLOW_NARROWING_COERCIONS && is_narrowing_int(dst_ti, src_ti)  return false;
+        
         // if both are u64, then using s64 as an intermediate (as we do below) is problematic
-        if ti_src == type_info(u64) && ti_dst == type_info(u64) {
+        if src_ti == type_info(u64) && dst_ti == type_info(u64) {
             (cast(*u64)dst.value_pointer).* = (cast(*u64)src.value_pointer).*;
             return true;
         }
@@ -57,10 +50,10 @@ coerce :: (dst: Any, src: Any) -> bool {
         return true;
         
       case .FLOAT;
-        ti_src := cast(*Type_Info_Integer) src.type;
-        ti_dst := cast(*Type_Info_Integer) dst.type;
+        src_ti := cast(*Type_Info_Integer) src.type;
+        dst_ti := cast(*Type_Info_Integer) dst.type;
         
-        if !ALLOW_NARROWING_COERCIONS && ti_src.runtime_size > ti_dst.runtime_size  return false;
+        if !ALLOW_NARROWING_COERCIONS && src_ti.runtime_size > dst_ti.runtime_size  return false;
         
         // kind of silly to even use an intermediate here...
         f64_value: float64;
@@ -75,27 +68,40 @@ coerce :: (dst: Any, src: Any) -> bool {
         return true;
         
       case .ARRAY;
-        ti_src := cast(*Type_Info_Array) src.type;
-        ti_dst := cast(*Type_Info_Array) dst.type;
+        src_ti := cast(*Type_Info_Array) src.type;
+        dst_ti := cast(*Type_Info_Array) dst.type;
         
-        if ti_dst.array_type   != .VIEW                // we only allow coercing from resizable or fixed arrays into array views
-        || ti_dst.element_type != ti_src.element_type  // and of course, the element type here needs to match
+        if dst_ti.array_type   != .VIEW                // we only allow coercing from resizable or fixed arrays into array views
+        || dst_ti.element_type != src_ti.element_type  // and of course, the element type here needs to match
             return false;
             
         dst_array: Array_View_64;
         
-        if ti_src.array_type == {
+        if src_ti.array_type == {
           case .RESIZABLE;
             dst_array = cast(*Array_View_64) src.value_pointer; // Array_View_64 and Resizable_Array are spec'd to line up
             return true;
             
           case .FIXED;
-            dst_array = .{ ti_src.array_count, src.value_pointer };
+            dst_array = .{ src_ti.array_count, src.value_pointer };
             return true;
         }
     }
     
     // an asumption of calling coerce is that we actually need to do 
     // some kind of coercion in the first place (refer to maybe_coerce)
+    return false;
+}
+
+#scope_file
+
+is_narrowing_int :: (dst_ti: *Type_Info_Integer, src_ti: *Type_Info_Integer) -> bool {
+    if src_ti.runtime_size > dst_ti.runtime_size  return true;
+    if src_ti.signed {
+        if !dst_ti.signed  return true;
+    } else {
+        if dst_ti.signed && src_ti.runtime_size == dst_ti.runtime_size  return true;
+    }
+    
     return false;
 }
