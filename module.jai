@@ -9,7 +9,10 @@
 // this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
 DEBUG :: false; 
 
-#module_parameters () (ENABLE_EXPANDED_COERCION_CAPABILITIES := false);
+#module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
+
+// TODO: need to have option to pass arguments and return_values by [] *void instead of [] Any.
+//       also, maybe an option to just pass a single pointer or [] u8 to buffer of all args 
 
 // ==========  Type Coercions ==========
 
@@ -22,8 +25,6 @@ DEBUG :: false;
         so by default you only get the minimal version.
     You also have the option to enable type coercions altogether, 
 */
-
-ENABLE_COERCIONS : enum { DISABLED :: 0; MINIMAL; EXTENDED; } : .MINIMAL;
 
 #if ENABLE_COERCIONS == {
   case .MINIMAL;
@@ -156,7 +157,12 @@ dcCallFloat64 :: dcCallDouble;
     
     Footnotes: 
         For #c_call procedures, we actually do pass structs by value.
-        This should work with the x64 backend, but I have only tested with LLVM so far.
+        Currently, Jai calls don't work on the x64 backend. 
+            I will have to look into fixing this, 
+            but it may not be trivial if the calling convention 
+            is meaningfully different than C's.
+        
+    
 */
 
 
@@ -182,7 +188,7 @@ dcCallFloat64 :: dcCallDouble;
     Perhaps we can smooth over some of the complications by just making a good wrapper struct around *DCCallVM.
 */
 
-setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
+setup_vm_jai :: (proc: Any, arguments: [] Any) -> *DCCallVM {
     assert(proc.type.type == .PROCEDURE, "proc.type.type was %!", proc.type.type);
     ti_proc := cast(*Type_Info_Procedure) proc.type;
     
@@ -191,7 +197,7 @@ setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
         return null;
     }
     
-    total_stack_needed, ok := _check_arguments(ti_proc, ..args);
+    total_stack_needed, ok := _check_arguments(ti_proc, arguments);
     
     vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
     dcMode(vm, DC_CALL_C_DEFAULT);
@@ -204,42 +210,67 @@ setup_vm_jai :: (proc: Any, args: ..Any) -> *DCCallVM {
         dcArgPointer(vm, *context);
     }
     
-    if !_push_arguments(vm, ti_proc.argument_types, args, jai_call = true)  return null;
+    if !_push_arguments(vm, ti_proc.argument_types, arguments, jai_call = true)  return null;
     
     ok = true;
     return vm;
 }
 
+
+// TODO: user should be able to provide an [] Any to catch returns into for a Jai call.  
+//       (and probably also in C call case, though that will be slightly different implementation)
+
 // We just assume that this will never fail right now. 
 // Only error we could have is memory allocation, or logic error because vm was not setup correctly. But that will probably just cause a crash anyhow, so I won't bother :)
-exec_vm_jai :: (vm: *DCCallVM, proc: Any, args: ..Any) -> ([] Any, bool) {
+exec_vm_jai :: (vm: *DCCallVM, proc: Any, return_values: [] Any) -> bool {
     assert(proc.type.type == .PROCEDURE, "proc.type.type was %!", proc.type.type);
     ti_proc := cast(*Type_Info_Procedure) proc.type;
     
-    // push pointers for return values
-    return_values := NewArray(ti_proc.return_types.count, Any,, temp);
-    
-    for ti_proc.return_types {
-        ptr := alloc(it.runtime_size,, temp);
-        dcArgPointer(vm, ptr);
-        return_values[it_index] = Any.{ it, ptr };
+    assert(ti_proc.return_types.count == return_values.count);
+    for return_values {
+        assert(it.type == ti_proc.return_types[it_index]);
+        assert(it.value_pointer != null);
+        dcArgPointer(vm, it.value_pointer);
     }
     
     proc_ptr := (cast(**void)proc.value_pointer).*;
     dcCallVoid(vm, xx proc_ptr);
     
-    return return_values, true;
+    return true;
 }
 
-DYNAMIC_JAI_CALL :: inline (proc: Any, args: ..Any) -> ([] Any, bool) {
-    vm := setup_vm_jai(proc, ..args);
+/*
+    This is really a convenience for only the most entry-level use case, and for general testing purposes.
+    For most things, one will really want to use the more granular procedures (setup_vm and exec_vm).
+    Also, this will just stuff the return values into temp storage, 
+        so if you want to actually catch returns into existing variables
+        then you will need use the setup_vm and exec_vm procs instead.
+*/
+DYNAMIC_JAI_CALL :: inline (proc: Any, arguments: ..Any) -> ([] Any, bool) {
+    vm := setup_vm_jai(proc, arguments);
     if !vm  return Any.[], false;
     defer dcFree(vm);
     
-    ret, ok := exec_vm_jai(vm, proc, ..args);
-    return ret, ok;
+    ti_proc := cast(*Type_Info_Procedure) proc.type;
+    return_values := NewArray(ti_proc.return_types.count, Any,, temp);
+    for ti_proc.return_types {
+        ptr := alloc(it.runtime_size,, temp);
+        return_values[it_index] = Any.{ it, ptr };
+    }
+    
+    ok := exec_vm_jai(vm, proc, return_values);
+    return return_values, ok;
 }
 
+// this is basically the same as DYNAMIC_JAI_CALL except that we provide 'return_values'
+setup_and_exec_vm_jai :: inline (proc: Any, arguments: [] Any, return_values: [] Any) -> bool {
+    vm := setup_vm_jai(proc, arguments);
+    if !vm  return false;
+    defer dcFree(vm);
+        
+    ok := exec_vm_jai(vm, proc, return_values);
+    return ok;
+}
 
 
 // TODO: split this up like DYNAMIC_JAI_CALL
@@ -252,7 +283,7 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
         return Any.{};
     }
     
-    total_stack_needed, ok := _check_arguments(ti_proc, ..args);
+    total_stack_needed, ok := _check_arguments(ti_proc, args);
     
     assert(ti_proc.return_types.count <= 1); // sanity check for c calls
     
@@ -367,19 +398,65 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     return return_value;
 }
 
+// user should call this before calling DYNAMIC_X_CALL or setup_vm_x procs 
+//     if they want to verify that argument types exactly match
+typecheck_arguments :: (ti_proc: *Type_Info_Procedure, arguments: ..Any) -> bool {
+    if ti_proc.argument_types.count != arguments.count {
+        log("argument count did not match. % != %", ti_proc.argument_types.count, arguments.count);
+        return false;
+    }
+    
+    for ti_proc.argument_types 
+        if it != arguments[it_index].type {
+            log("argument % did not match. % != %", it_index, type_info_to_type(it), type_info_to_type(arguments[it_index].type));
+            return false;
+        }
+    
+    return true;
+}
+
+// user should call this before calling DYNAMIC_X_CALL or setup_vm_x procs 
+//     if they want to verify that argument types exactly match
+typecheck_return_values :: (ti_proc: *Type_Info_Procedure, return_values: ..Any) -> bool {
+    if ti_proc.return_types.count != return_values.count 
+        return false;
+    
+    for ti_proc.return_types 
+        if it != return_values[it_index].type{
+            log("return value % did not match. % != %", it_index, type_info_to_type(it), type_info_to_type(arguments[it_index].type));
+            return false;
+        }
+    
+    return true;
+}
+
+
 #scope_module
 
 /* 
-    IMPORTANT: I am in the process of removing this procedure, 
+    IMPORTANT: 
+    I am in the process of removing this procedure, 
     as it doesn't make sense to check and puch arguments separately 
     now that I am introducing the type coercion stuff.
+    
+    NEVERMIND THE ABOVE:
+    I will actually be keeping this procedure in and optionally running a pre-check on exact match of argument types.
+    There are obviously going to be cases where we want to enforce an exact match in argument types, and that should be done before creating the VM.
+    
+    ACTUALLY:
+    we should just do the exact precheck before even calling to create the vm if we want an exact match
+    If we check here, then whenh the user gets back 'null' from setup_vm_jai or DYNAMIC_JAI_CALL, then they don't actually know what went wrong
+    There's also some complication that gets added in regards to how we configure coercion settings if the strict type check needs to be done here.
+        specifically, in the case that multiple modules import dyncall, we have an issue with one getting coercions they don't expect to get...
+    so, I think the best option is to just have a convenience proc that user can call to check args and returns before committing
+    
 */
-_check_arguments :: (ti_proc: *Type_Info_Procedure, args: ..Any) -> (u64, bool) {
+_check_arguments :: (ti_proc: *Type_Info_Procedure, args: [] Any) -> (u64, bool) {
     if ti_proc.argument_types.count != args.count {
         log("provided incorrect number of arguments for procedure!\n");
         return 0, false;
     }
-    
+        
     total_stack_needed: u64;
     for ti_proc.argument_types {
         if it.type == .STRUCT {
