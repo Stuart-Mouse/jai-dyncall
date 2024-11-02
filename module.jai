@@ -197,6 +197,10 @@ setup_vm_jai :: (proc: Any, arguments: [] Any) -> *DCCallVM {
         return null;
     }
     
+    // TODO: we don't really do anything with this total_stack_needed right now because I don't actually know how it works exactly
+    //       but the dyncall docs kind of suck so I didn't want to caus ememory issues and we have that big ass safety margin below.
+    //       also, checking args here is not liek what we do for return vals in exec_vm_jai
+    //       so we should probably just assert argument types match here and leave the checking upto a higher-level versionof this proc
     total_stack_needed, ok := _check_arguments(ti_proc, arguments);
     
     vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
@@ -210,6 +214,7 @@ setup_vm_jai :: (proc: Any, arguments: [] Any) -> *DCCallVM {
         dcArgPointer(vm, *context);
     }
     
+    // TODO: this should take *voids maybe instead of Any
     if !_push_arguments(vm, ti_proc.argument_types, arguments, jai_call = true)  return null;
     
     ok = true;
@@ -220,12 +225,14 @@ setup_vm_jai :: (proc: Any, arguments: [] Any) -> *DCCallVM {
 // TODO: user should be able to provide an [] Any to catch returns into for a Jai call.  
 //       (and probably also in C call case, though that will be slightly different implementation)
 
-// We just assume that this will never fail right now. 
-// Only error we could have is memory allocation, or logic error because vm was not setup correctly. But that will probably just cause a crash anyhow, so I won't bother :)
+
 exec_vm_jai :: (vm: *DCCallVM, proc: Any, return_values: [] Any) -> bool {
     assert(proc.type.type == .PROCEDURE, "proc.type.type was %!", proc.type.type);
     ti_proc := cast(*Type_Info_Procedure) proc.type;
     
+    // we assert that return types are as they should be, since user should have done their own type checking
+    // but we still want to catch those errors in case they don't
+    // but it's still slow, so I dunno, maybe we wrap this in a debug flag later...
     assert(ti_proc.return_types.count == return_values.count);
     for return_values {
         assert(it.type == ti_proc.return_types[it_index]);
@@ -238,6 +245,17 @@ exec_vm_jai :: (vm: *DCCallVM, proc: Any, return_values: [] Any) -> bool {
     
     return true;
 }
+
+// this is basically the same as DYNAMIC_JAI_CALL except that we provide 'return_values'
+setup_and_exec_vm_jai :: inline (proc: Any, arguments: [] Any, return_values: [] Any) -> bool {
+    vm := setup_vm_jai(proc, arguments);
+    if !vm  return false;
+    defer dcFree(vm);
+        
+    ok := exec_vm_jai(vm, proc, return_values);
+    return ok;
+}
+
 
 /*
     This is really a convenience for only the most entry-level use case, and for general testing purposes.
@@ -260,16 +278,6 @@ DYNAMIC_JAI_CALL :: inline (proc: Any, arguments: ..Any) -> ([] Any, bool) {
     
     ok := exec_vm_jai(vm, proc, return_values);
     return return_values, ok;
-}
-
-// this is basically the same as DYNAMIC_JAI_CALL except that we provide 'return_values'
-setup_and_exec_vm_jai :: inline (proc: Any, arguments: [] Any, return_values: [] Any) -> bool {
-    vm := setup_vm_jai(proc, arguments);
-    if !vm  return false;
-    defer dcFree(vm);
-        
-    ok := exec_vm_jai(vm, proc, return_values);
-    return ok;
 }
 
 
@@ -397,6 +405,11 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
     
     return return_value;
 }
+
+// ========== Type Checking ==========
+
+// These procs take Any's for the arguments since that is the common case.
+// I will probably add versions taking only the types soon, since that is also useful.
 
 // user should call this before calling DYNAMIC_X_CALL or setup_vm_x procs 
 //     if they want to verify that argument types exactly match
