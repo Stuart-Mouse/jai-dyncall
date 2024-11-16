@@ -197,34 +197,22 @@ setup_vm_jai :: (proc: Any, arguments: [] Any) -> *DCCallVM {
         return null;
     }
     
-    // TODO: we don't really do anything with this total_stack_needed right now because I don't actually know how it works exactly
-    //       but the dyncall docs kind of suck so I didn't want to caus ememory issues and we have that big ass safety margin below.
-    //       also, checking args here is not liek what we do for return vals in exec_vm_jai
-    //       so we should probably just assert argument types match here and leave the checking upto a higher-level versionof this proc
-    total_stack_needed, ok := _check_arguments(ti_proc, arguments);
-    
-    vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
+    vm := dcNewCallVM(2048); 
     dcMode(vm, DC_CALL_C_DEFAULT);
     dcReset(vm);
     
-    ok = false;
+    ok := false;
     defer if !ok  dcFree(vm);
     
     if !(ti_proc.procedure_flags & .HAS_NO_CONTEXT) {
         dcArgPointer(vm, *context);
     }
     
-    // TODO: this should take *voids maybe instead of Any
     if !_push_arguments(vm, ti_proc.argument_types, arguments, jai_call = true)  return null;
     
     ok = true;
     return vm;
 }
-
-
-// TODO: user should be able to provide an [] Any to catch returns into for a Jai call.  
-//       (and probably also in C call case, though that will be slightly different implementation)
-
 
 exec_vm_jai :: (vm: *DCCallVM, proc: Any, return_values: [] Any) -> bool {
     assert(proc.type.type == .PROCEDURE, "proc.type.type was %!", proc.type.type);
@@ -291,13 +279,13 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
         return Any.{};
     }
     
-    total_stack_needed, ok := _check_arguments(ti_proc, args);
+    // total_stack_needed, ok := _check_arguments(ti_proc, args);
     
     assert(ti_proc.return_types.count <= 1); // sanity check for c calls
     
     // Begin the actual call
     
-    vm := dcNewCallVM(total_stack_needed + 1024); // big ass safety margin?
+    vm := dcNewCallVM(2048); // big ass safety margin?
     dcMode(vm, DC_CALL_C_DEFAULT);
     dcReset(vm);
     defer dcFree(vm);
@@ -393,7 +381,7 @@ DYNAMIC_C_CALL :: (proc: Any, args: ..Any) -> Any {
         #through;
         
       case .STRUCT;
-        ag := find_DCaggr(return_type);
+        ag := find_or_make_and_register_DCaggr(return_type_for_aggr);
         if !ag {
             log("unable to find DCaggr for struct when calling proc!\n");
         }
@@ -534,7 +522,7 @@ _push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_cal
                 
               case 8; 
         //         #if DEBUG { log("dcArgFloat64\n"); }
-                val: DCfloat32;
+                val: DCfloat64;
                 if !maybe_coerce(val, arg_any)  return false;
                 dcArgFloat64(vm, val); 
                 
@@ -582,6 +570,75 @@ _push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_cal
     return true;
 }
 
+
+_push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *void, jai_call := false) -> (bool) {
+    assert(arg_types.count == args.count);
+    for arg_type: arg_types {
+        arg_ptr := args[it_index];
+        
+        if arg_type.type == {
+          case .POINTER;
+            dcArgPointer(vm, (cast(*DCpointer)arg_ptr).*); 
+            
+          case .ENUM; #through;
+          case .BOOL; #through;
+          case .INTEGER;
+            if arg_type.runtime_size == {
+              case 1; dcArgInt8 (vm, cast(*DCint8 )arg_ptr); 
+              case 2; dcArgInt16(vm, cast(*DCint16)arg_ptr); 
+              case 4; dcArgInt32(vm, cast(*DCint32)arg_ptr); 
+              case 8; dcArgInt64(vm, cast(*DCint64)arg_ptr); 
+              case;
+                log("invalid integer size!\n");
+                return false;
+            }
+            
+          case .FLOAT;
+            if arg_type.runtime_size == {
+              case 4; dcArgFloat32(vm, cast(*DCfloat32)arg_ptr); 
+              case 8; dcArgFloat64(vm, cast(*DCfloat32)arg_ptr); 
+              case;
+                log("invalid float size!\n");
+                return false;
+            }
+            
+          case .STRUCT;
+            if jai_call {
+                dcArgPointer(vm, arg_ptr);   
+            } else {
+                ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)arg_type);
+                if !ag  return false;
+                dcArgAggr(vm, ag, arg_ptr);  
+            }
+            
+          case .ARRAY;
+            ti_array := cast(*Type_Info_Array) arg_type;
+            if ti_array.array_type == {
+              case .VIEW;
+                ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+                if !ag  return false;
+                dcArgAggr(vm, ag, arg_ptr);  
+                
+              case .RESIZABLE;
+                ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
+                if !ag  return false;
+                dcArgAggr(vm, ag, arg_ptr);  
+                
+              case;
+                if !jai_call {
+                    log("Error: cannot pass a fixed array to a #c_call procedure!\n");
+                    return false;
+                }
+                
+                ag := find_or_make_and_register_DCaggr(xx ti_array);
+                if !ag  return false;
+                dcArgAggr(vm, ag, arg_ptr);  
+            }
+        }
+    }
+    
+    return true;
+}
 
 
 
