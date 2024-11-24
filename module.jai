@@ -433,27 +433,27 @@ typecheck_return_values :: (ti_proc: *Type_Info_Procedure, return_values: ..Any)
 
 
 push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_call := false) -> bool {
-    if arg_type.type == {
+    if type.type == {
       case .POINTER;
-        dcArgPointer(vm, (cast(*DCpointer)arg_ptr).*); 
+        dcArgPointer(vm, (cast(*DCpointer)value_pointer).*); 
         
       case .ENUM; #through;
       case .BOOL; #through;
       case .INTEGER;
-        if arg_type.runtime_size == {
-          case 1; dcArgInt8 (vm, cast(*DCint8 )arg_ptr); 
-          case 2; dcArgInt16(vm, cast(*DCint16)arg_ptr); 
-          case 4; dcArgInt32(vm, cast(*DCint32)arg_ptr); 
-          case 8; dcArgInt64(vm, cast(*DCint64)arg_ptr); 
+        if type.runtime_size == {
+          case 1; dcArgInt8 (vm, cast(*DCint8 )value_pointer); 
+          case 2; dcArgInt16(vm, cast(*DCint16)value_pointer); 
+          case 4; dcArgInt32(vm, cast(*DCint32)value_pointer); 
+          case 8; dcArgInt64(vm, cast(*DCint64)value_pointer); 
           case;
             log("invalid integer size!\n");
             return false;
         }
         
       case .FLOAT;
-        if arg_type.runtime_size == {
-          case 4; dcArgFloat32(vm, cast(*DCfloat32)arg_ptr); 
-          case 8; dcArgFloat64(vm, cast(*DCfloat32)arg_ptr); 
+        if type.runtime_size == {
+          case 4; dcArgFloat32(vm, cast(*DCfloat32)value_pointer); 
+          case 8; dcArgFloat64(vm, cast(*DCfloat32)value_pointer); 
           case;
             log("invalid float size!\n");
             return false;
@@ -461,25 +461,25 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
         
       case .STRUCT;
         if jai_call {
-            dcArgPointer(vm, arg_ptr);   
+            dcArgPointer(vm, value_pointer);   
         } else {
-            ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)arg_type);
+            ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)type);
             if !ag  return false;
-            dcArgAggr(vm, ag, arg_ptr);  
+            dcArgAggr(vm, ag, value_pointer);  
         }
         
       case .ARRAY;
-        ti_array := cast(*Type_Info_Array) arg_type;
+        ti_array := cast(*Type_Info_Array) type;
         if ti_array.array_type == {
           case .VIEW;
             ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
             if !ag  return false;
-            dcArgAggr(vm, ag, arg_ptr);  
+            dcArgAggr(vm, ag, value_pointer);  
             
           case .RESIZABLE;
             ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
             if !ag  return false;
-            dcArgAggr(vm, ag, arg_ptr);  
+            dcArgAggr(vm, ag, value_pointer);  
             
           case;
             if !jai_call {
@@ -489,7 +489,7 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
             
             ag := find_or_make_and_register_DCaggr(xx ti_array);
             if !ag  return false;
-            dcArgAggr(vm, ag, arg_ptr);  
+            dcArgAggr(vm, ag, value_pointer);  
         }
     }
     
