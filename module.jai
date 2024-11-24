@@ -432,6 +432,71 @@ typecheck_return_values :: (ti_proc: *Type_Info_Procedure, return_values: ..Any)
 }
 
 
+push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_call := false) -> bool {
+    if arg_type.type == {
+      case .POINTER;
+        dcArgPointer(vm, (cast(*DCpointer)arg_ptr).*); 
+        
+      case .ENUM; #through;
+      case .BOOL; #through;
+      case .INTEGER;
+        if arg_type.runtime_size == {
+          case 1; dcArgInt8 (vm, cast(*DCint8 )arg_ptr); 
+          case 2; dcArgInt16(vm, cast(*DCint16)arg_ptr); 
+          case 4; dcArgInt32(vm, cast(*DCint32)arg_ptr); 
+          case 8; dcArgInt64(vm, cast(*DCint64)arg_ptr); 
+          case;
+            log("invalid integer size!\n");
+            return false;
+        }
+        
+      case .FLOAT;
+        if arg_type.runtime_size == {
+          case 4; dcArgFloat32(vm, cast(*DCfloat32)arg_ptr); 
+          case 8; dcArgFloat64(vm, cast(*DCfloat32)arg_ptr); 
+          case;
+            log("invalid float size!\n");
+            return false;
+        }
+        
+      case .STRUCT;
+        if jai_call {
+            dcArgPointer(vm, arg_ptr);   
+        } else {
+            ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)arg_type);
+            if !ag  return false;
+            dcArgAggr(vm, ag, arg_ptr);  
+        }
+        
+      case .ARRAY;
+        ti_array := cast(*Type_Info_Array) arg_type;
+        if ti_array.array_type == {
+          case .VIEW;
+            ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+            if !ag  return false;
+            dcArgAggr(vm, ag, arg_ptr);  
+            
+          case .RESIZABLE;
+            ag := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
+            if !ag  return false;
+            dcArgAggr(vm, ag, arg_ptr);  
+            
+          case;
+            if !jai_call {
+                log("Error: cannot pass a fixed array to a #c_call procedure!\n");
+                return false;
+            }
+            
+            ag := find_or_make_and_register_DCaggr(xx ti_array);
+            if !ag  return false;
+            dcArgAggr(vm, ag, arg_ptr);  
+        }
+    }
+    
+    return true;
+}
+
+
 #scope_module
 
 /* 
@@ -639,8 +704,6 @@ _push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *v
     
     return true;
 }
-
-
 
 
 // TODO: maybe move this to some utils file if we do keep it around
