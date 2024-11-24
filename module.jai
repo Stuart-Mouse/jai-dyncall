@@ -441,10 +441,10 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
       case .BOOL; #through;
       case .INTEGER;
         if type.runtime_size == {
-          case 1; dcArgInt8 (vm, cast(*DCint8 )value_pointer); 
-          case 2; dcArgInt16(vm, cast(*DCint16)value_pointer); 
-          case 4; dcArgInt32(vm, cast(*DCint32)value_pointer); 
-          case 8; dcArgInt64(vm, cast(*DCint64)value_pointer); 
+          case 1; dcArgInt8 (vm, (cast(*DCint8 )value_pointer).*); 
+          case 2; dcArgInt16(vm, (cast(*DCint16)value_pointer).*); 
+          case 4; dcArgInt32(vm, (cast(*DCint32)value_pointer).*); 
+          case 8; dcArgInt64(vm, (cast(*DCint64)value_pointer).*); 
           case;
             log("invalid integer size!\n");
             return false;
@@ -452,8 +452,8 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
         
       case .FLOAT;
         if type.runtime_size == {
-          case 4; dcArgFloat32(vm, cast(*DCfloat32)value_pointer); 
-          case 8; dcArgFloat64(vm, cast(*DCfloat32)value_pointer); 
+          case 4; dcArgFloat32(vm, (cast(*DCfloat32)value_pointer).*); 
+          case 8; dcArgFloat64(vm, (cast(*DCfloat32)value_pointer).*); 
           case;
             log("invalid float size!\n");
             return false;
@@ -461,7 +461,7 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
         
       case .STRUCT;
         if jai_call {
-            dcArgPointer(vm, value_pointer);   
+            dcArgPointer(vm, value_pointer);
         } else {
             ag := find_or_make_and_register_DCaggr(cast(*Type_Info_Struct)type);
             if !ag  return false;
