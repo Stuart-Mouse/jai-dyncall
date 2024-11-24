@@ -44,7 +44,7 @@ maybe_coerce :: (dst: Any, src: Any) -> bool {
     #if ENABLE_COERCIONS {
         return coerce(dst, src);
     } else {
-        log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", type_info_to_type(src.type), T);
+        log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", as_type(src.type), T);
         return false;
     }
 }
@@ -409,7 +409,7 @@ typecheck_arguments :: (ti_proc: *Type_Info_Procedure, arguments: ..Any) -> bool
     
     for ti_proc.argument_types 
         if it != arguments[it_index].type {
-            log("argument % did not match. % != %", it_index, type_info_to_type(it), type_info_to_type(arguments[it_index].type));
+            log("argument % did not match. % != %", it_index, as_type(it), as_type(arguments[it_index].type));
             return false;
         }
     
@@ -424,13 +424,17 @@ typecheck_return_values :: (ti_proc: *Type_Info_Procedure, return_values: ..Any)
     
     for ti_proc.return_types 
         if it != return_values[it_index].type{
-            log("return value % did not match. % != %", it_index, type_info_to_type(it), type_info_to_type(arguments[it_index].type));
+            log("return value % did not match. % != %", it_index, as_type(it), as_type(arguments[it_index].type));
             return false;
         }
     
     return true;
 }
 
+
+push_any_argument :: inline (vm: *DCCallVM, any: Any, jai_call := false) -> bool {
+    return push_argument(vm, any.type, any.value_pointer, jai_call);
+}
 
 push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_call := false) -> bool {
     if type.type == {
@@ -458,6 +462,11 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
             log("invalid float size!\n");
             return false;
         }
+        
+      case .STRING;
+        ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+        if !ag  return false;
+        dcArgAggr(vm, ag, value_pointer);  
         
       case .STRUCT;
         if jai_call {
@@ -491,6 +500,10 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
             if !ag  return false;
             dcArgAggr(vm, ag, value_pointer);  
         }
+        
+      case;
+        log("Error: unable to push argument of type %\n", as_type(type));
+        return false;
     }
     
     return true;
@@ -707,7 +720,7 @@ _push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *v
 
 
 // TODO: maybe move this to some utils file if we do keep it around
-type_info_to_type :: inline (ti: *Type_Info) -> Type {
+as_type :: inline (ti: *Type_Info) -> Type {
     return (cast(*Type)*ti).*;
 }
 
