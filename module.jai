@@ -1,54 +1,4 @@
-#assert OS == .WINDOWS; 
-
-#import "Basic";
-
-#load "bindings.jai";
-#load "dcaggr.jai";
-
-// set to true to log a bunch of stuff
-// this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
-DEBUG :: false; 
-
-#module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
-
-// TODO: need to have option to pass arguments and return_values by [] *void instead of [] Any.
-//       also, maybe an option to just pass a single pointer or [] u8 to buffer of all args 
-
-// ==========  Type Coercions ==========
-
-/*
-    This module provides some capabilities to perform type coercions on arguments passed to dyncall.
-    The most basic capabilites are included in coercion_minimal.jai, 
-        but if you would like to have access to more extensive and configurable coercion settings, 
-        then you can import that functionality from my Data_Packer module.
-    But of course I realize that most people will probably not want all that, 
-        so by default you only get the minimal version.
-    You also have the option to enable type coercions altogether, 
-*/
-
-#if ENABLE_COERCIONS == {
-  case .MINIMAL;
-    #load "coercion_minimal.jai";
-  case .EXTENDED;
-    #load "coercion.jai";
-}
-
-// This procedure is the same for either the minimal or extended type coercion.
-// The additional parameters settings required by the extended type coercion are set in the context.
-maybe_coerce :: (dst: Any, src: Any) -> bool {
-    if src.type == dst.type {
-        memcpy(dst.value_pointer, src.value_pointer, src.type.runtime_size);
-        return true;
-    }
-    
-    #if ENABLE_COERCIONS {
-        return coerce(dst, src);
-    } else {
-        log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", as_type(src.type), T);
-        return false;
-    }
-}
-
+ 
 // ========== Additional Bindings ==========
 
 // Some bindings which the bindings generator missed. Maybe due to being #defines for character literals?
@@ -138,7 +88,6 @@ dcCallFloat64 :: dcCallDouble;
 //         return Any.[];
 //     }
 // }
-
 
 
 /*
@@ -690,4 +639,57 @@ as_type :: inline (ti: *Type_Info) -> Type {
     return (*ti).(*Type).*;
 }
 
+
+#scope_module
+
+#assert OS == .WINDOWS; 
+
+#import "Basic";
+
+#load "bindings.jai";
+#load "dcaggr.jai";
+
+// set to true to log a bunch of stuff
+// this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
+DEBUG :: false; 
+
+#module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .EXTENDED);
+
+// TODO: need to have option to pass arguments and return_values by [] *void instead of [] Any.
+//       also, maybe an option to just pass a single pointer or [] u8 to buffer of all args 
+
+// ==========  Type Coercions ==========
+
+/*
+    This module provides some capabilities to perform type coercions on arguments passed to dyncall.
+    The most basic capabilites are included in coercion_minimal.jai, 
+        but if you would like to have access to more extensive and configurable coercion settings, 
+        then you can import that functionality from my Data_Packer module.
+    But of course I realize that most people will probably not want all that, 
+        so by default you only get the minimal version.
+    You also have the option to enable type coercions altogether, 
+*/
+
+#if ENABLE_COERCIONS == {
+  case .MINIMAL;
+    #load "coercion_minimal.jai";
+  case .EXTENDED;
+    #load "coercion.jai";
+}
+
+// This procedure is the same for either the minimal or extended type coercion.
+// The additional parameters settings required by the extended type coercion are set in the context.
+maybe_coerce :: (dst: Any, src: Any) -> bool {
+    if src.type == dst.type {
+        memcpy(dst.value_pointer, src.value_pointer, src.type.runtime_size);
+        return true;
+    }
+    
+    #if ENABLE_COERCIONS {
+        return coerce(dst, src);
+    } else {
+        log("Error: argument type '%' does not match expected type '%' and type coercions are not enabled.", as_type(src.type), T);
+        return false;
+    }
+}
 
