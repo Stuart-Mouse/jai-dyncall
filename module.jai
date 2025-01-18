@@ -390,10 +390,10 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
       case .BOOL; #through;
       case .INTEGER;
         if type.runtime_size == {
-          case 1; dcArgInt8 (vm, value_pointer.st(*DCint8 ).*); 
-          case 2; dcArgInt16(vm, value_pointer.st(*DCint16).*); 
-          case 4; dcArgInt32(vm, value_pointer.st(*DCint32).*); 
-          case 8; dcArgInt64(vm, value_pointer.st(*DCint64).*); 
+          case 1; dcArgInt8 (vm, value_pointer.(*DCint8 ).*); 
+          case 2; dcArgInt16(vm, value_pointer.(*DCint16).*); 
+          case 4; dcArgInt32(vm, value_pointer.(*DCint32).*); 
+          case 8; dcArgInt64(vm, value_pointer.(*DCint64).*); 
           case;   assert(false, "Invalid integer size!");
         }
         
