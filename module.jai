@@ -653,7 +653,7 @@ as_type :: inline (ti: *Type_Info) -> Type {
 // this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
 DEBUG :: false; 
 
-#module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .EXTENDED);
+#module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
 
 // TODO: need to have option to pass arguments and return_values by [] *void instead of [] Any.
 //       also, maybe an option to just pass a single pointer or [] u8 to buffer of all args 
