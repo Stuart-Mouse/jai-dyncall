@@ -475,7 +475,7 @@ push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_call
         
         if arg_type.type == {
           case .POINTER;
-        //     #if DEBUG { log("dcArgPointer\n"); }
+            if arg_any.type.type != .POINTER return false;
             dcArgPointer(vm, arg_any.value_pointer.(*DCpointer).*); 
             
           case .ENUM; #through;
@@ -633,12 +633,113 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
     return true;
 }
 
+/*
+    We will still have some issues to iron out here, specifically:
+        how to preserve .SYMMETRIC flag behaviour?
+        
+    I probably will not actually use this workaround until I really have to, 
+    since it will require us to do some really inconvenient stuff both here and in Lead Sheets.
+    
+    Dynamic jai calls will become much more inconvenient as they will basically no longer exist, 
+    we can still have some macro for that, but it doesnt do much good since it will require a constant value for procedure, which defeats the point of the dyncall
+    
+    We could also use a custom type that stores its own form of procedure type info, or stores both the original jai call ti and the ccall ti as well
+    but now we have this extra fat proc ptr basically, like 24 bytes at least, which is stupid
+    
+    and since, we would need comptime processing on all jai procedures, they'd basically become unusable for doing a sort of dyncallback thing, 
+    where maybe we get some procedure Any and all the arguments totally dynamically at runtime
+    or even a case as simple as loading some jai dll and getting a procedure pointer that way. even if we know the type of the procedure, we can't call it without the wrapper
+        (in this case, we could kind of handle it by having the MAKE_C_CALL proca actually return a higher-order function that takes the actual jai proc ptr as first arg, but this is getting ridiculous)
+    
+    the real optimal solution would not be this crappy hack, but to just gerenate the proper bytecode manually for the jai calling convention, which is basically just doing what dyncall does for C
+    but I don't know what that calling convention looks like and I don't feel like doing the required research to make that work right now, not to mention that it's probably subject to change in the future!
+    
+    
+    What we're generating below basically looks like this. 
+    It's just a very thin wrapper proc to push the context and call the underlying jai procedure:
+    
+    c_proc :: (_context: *#Context, arg_1: T1, arg_2: T2, ..., ret_1: R1, ret_2: R2, ...) {
+        push_context _context.* {
+            ret_1.*, ret_2.*, ... := jai_proc(arg_1, arg_2, ...);
+        }
+    }
+*/
+// MAKE_C_CALL :: ($proc_ptr: $P) -> (*void, *Type_Info_Procedure) #expand {
+//     #insert -> string {
+//         tip :: type_info(P);
+//         assert(tip.type == .PROCEDURE && !(tip.procedure_flags & .IS_C_CALL)); // unable to use a #modify here...
+        
+//         sb: String_Builder;
+        
+//         append(*sb, "proc :: (");
+//         if !(tip.procedure_flags & .HAS_NO_CONTEXT)  append(*sb, "_context: *#Context, ");
+//         for tip.argument_types {
+//             if it_index != 0  append(*sb, ", ");
+//             print_to_builder(*sb, "arg_%: %",  it_index+1, as_type(it));
+//         }
+//         for tip.return_types   print_to_builder(*sb, ", ret_%: *%", it_index+1, as_type(it));
+//         append(*sb, ") ");
+//         append(*sb, "#c_call {\n");
+        
+//         append(*sb, "\tpush_context _context.* {\n");
+        
+//         append(*sb, "\t\t");
+//         for 1..tip.return_types.count {
+//             print_to_builder(*sb, "ret_%.*", it);
+//             if it != tip.argument_types.count  append(*sb, ", ");
+//         }
+//         append(*sb, " = proc_ptr(");
+//         for tip.argument_types {
+//             if it_index != 0  append(*sb, ", ");
+//             print_to_builder(*sb, "arg_%", it_index+1);
+//         }
+//         append(*sb, ");\n");
+        
+//         append(*sb, "\t}\n");
+        
+//         append(*sb, "}\n");
+//         return builder_to_string(*sb);
+//     };
+    
+//     return xx proc, type_info(type_of(proc));
+// }
 
-// TODO: maybe move this to some utils file if we do keep it around
-as_type :: inline (ti: *Type_Info) -> Type {
-    return (*ti).(*Type).*;
-}
-
+// MAKE_C_WRAPPER :: ($P: Type) -> (*void, *Type_Info_Procedure) #expand {
+//     #insert -> string {
+//         tip :: type_info(P);
+//         assert(tip.type == .PROCEDURE && !(tip.procedure_flags & .IS_C_CALL)); // unable to use a #modify here...
+        
+//         sb: String_Builder;
+        
+//         append(*sb, "proc :: (proc_ptr: *");
+//         if !(tip.procedure_flags & .HAS_NO_CONTEXT)  append(*sb, ", _context: *#Context");
+//         for tip.argument_types print_to_builder(*sb, ", arg_%: %",  it_index+1, as_type(it));
+//         for tip.return_types   print_to_builder(*sb, ", ret_%: *%", it_index+1, as_type(it));
+//         append(*sb, ") ");
+//         append(*sb, "#c_call {\n");
+        
+//         append(*sb, "\tpush_context _context.* {\n");
+        
+//         append(*sb, "\t\t");
+//         for 1..tip.return_types.count {
+//             print_to_builder(*sb, "ret_%.*", it);
+//             if it != tip.argument_types.count  append(*sb, ", ");
+//         }
+//         append(*sb, " = proc_ptr(");
+//         for tip.argument_types {
+//             if it_index != 0  append(*sb, ", ");
+//             print_to_builder(*sb, "arg_%", it_index+1);
+//         }
+//         append(*sb, ");\n");
+        
+//         append(*sb, "\t}\n");
+        
+//         append(*sb, "}\n");
+//         return builder_to_string(*sb);
+//     };
+    
+//     return xx proc, type_info(type_of(proc));
+// }
 
 #scope_module
 
@@ -649,14 +750,7 @@ as_type :: inline (ti: *Type_Info) -> Type {
 #load "bindings.jai";
 #load "dcaggr.jai";
 
-// set to true to log a bunch of stuff
-// this is not currently a module parameter since I plan to remove the frivolous debug logging once things have solidified more
-DEBUG :: false; 
-
 #module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
-
-// TODO: need to have option to pass arguments and return_values by [] *void instead of [] Any.
-//       also, maybe an option to just pass a single pointer or [] u8 to buffer of all args 
 
 // ==========  Type Coercions ==========
 
@@ -693,3 +787,5 @@ maybe_coerce :: (dst: Any, src: Any) -> bool {
     }
 }
 
+// TODO: maybe move this to some utils file if we do keep it around
+as_type :: inline (ti: *Type_Info) -> Type { return (*ti).(*Type).*; }

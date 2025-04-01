@@ -42,7 +42,6 @@ find_or_make_and_register_DCaggr :: (ti: *Type_Info) -> *DCaggr {
     ag := find_DCaggr(ti);
     if !ag {
         ag = make_DCaggr(ti);
-        #if DEBUG log("created new DCaggr object @ %\n", ag);
         register_DCaggr(ti, ag);
     }
     return ag;
