@@ -503,8 +503,7 @@ push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_call
                 dcArgInt64(vm, val); 
                 
               case;
-                log("invalid integer size!\n");
-                return false;
+                assert(false, "invalid integer size!");
             }
             
           case .FLOAT;
@@ -520,8 +519,7 @@ push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_call
                 dcArgFloat64(vm, val); 
                 
               case;
-                log("invalid float size!\n");
-                return false;
+                assert(false, "invalid float size!");
             }
             
           case .STRUCT;
@@ -582,8 +580,7 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
               case 4; dcArgInt32(vm, arg_ptr.(*DCint32)); 
               case 8; dcArgInt64(vm, arg_ptr.(*DCint64)); 
               case;
-                log("invalid integer size!\n");
-                return false;
+                assert(false, "invalid integer size!");
             }
             
           case .FLOAT;
@@ -591,8 +588,7 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
               case 4; dcArgFloat32(vm, arg_ptr.(*DCfloat32)); 
               case 8; dcArgFloat64(vm, arg_ptr.(*DCfloat32)); 
               case;
-                log("invalid float size!\n");
-                return false;
+                assert(false, "invalid float size!");
             }
             
           case .STRUCT;
