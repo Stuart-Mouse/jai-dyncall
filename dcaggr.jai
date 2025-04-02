@@ -47,7 +47,7 @@ find_or_make_and_register_DCaggr :: (ti: *Type_Info) -> *DCaggr {
     return ag;
 }
 
-#scope_module
+#scope_file
 
 /*
     In general, we want to avoid making DCaggr objects for fixed array types.

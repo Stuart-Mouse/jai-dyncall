@@ -14,7 +14,7 @@
         2. you will still get a runtime error in debug if some value ends up out-of-range
 */
 
-// for now its just a global constant...
+// for now its just a global constant...  maybe should be put into context?
 ALLOW_NARROWING_COERCIONS :: true;
 
 coerce :: (dst: Any, src: Any) -> bool {
@@ -29,57 +29,76 @@ coerce :: (dst: Any, src: Any) -> bool {
         
         // if both are u64, then using s64 as an intermediate (as we do below) is problematic
         if src_ti == type_info(u64) && dst_ti == type_info(u64) {
-            (cast(*u64)dst.value_pointer).* = (cast(*u64)src.value_pointer).*;
+            dst.value_pointer.(*u64).* = src.value_pointer.(*u64).*;
             return true;
         }
         
         // all other cases we can use s64 as an intermediate and then we don't have to do the combinatorics
+        // still have to switch on signedness though...
         s64_value: s64;
-        if src.type.runtime_size == {
-            case  1; s64_value = cast(s64) (cast(*s8  )src.value_pointer).*;
-            case  2; s64_value = cast(s64) (cast(*s16 )src.value_pointer).*;
-            case  4; s64_value = cast(s64) (cast(*s32 )src.value_pointer).*;
-            case  8; s64_value = cast(s64) (cast(*s64 )src.value_pointer).*;
+        if src_ti.signed {
+            if src.type.runtime_size == {
+              case 1; s64_value = src.value_pointer.(*s8 ).*.(s64);
+              case 2; s64_value = src.value_pointer.(*s16).*.(s64);
+              case 4; s64_value = src.value_pointer.(*s32).*.(s64);
+              case 8; s64_value = src.value_pointer.(*s64).*.(s64);
+            }
+        } else {
+            if src.type.runtime_size == {
+              case 1; s64_value = src.value_pointer.(*u8 ).*.(s64);
+              case 2; s64_value = src.value_pointer.(*u16).*.(s64);
+              case 4; s64_value = src.value_pointer.(*u32).*.(s64);
+              case 8; s64_value = src.value_pointer.(*u64).*.(s64);
+            }
         }
-        if dst.type.runtime_size == {
-            case  1; (cast(*s8 )dst.value_pointer).* = cast(s8 ) s64_value;
-            case  2; (cast(*s16)dst.value_pointer).* = cast(s16) s64_value;
-            case  4; (cast(*s32)dst.value_pointer).* = cast(s32) s64_value;
-            case  8; (cast(*s64)dst.value_pointer).* = cast(s64) s64_value;
+        
+        if dst_ti.signed {
+            if dst.type.runtime_size == {
+              case 1; dst.value_pointer.(*s8 ).* = s64_value.(s8 );
+              case 2; dst.value_pointer.(*s16).* = s64_value.(s16);
+              case 4; dst.value_pointer.(*s32).* = s64_value.(s32);
+              case 8; dst.value_pointer.(*s64).* = s64_value.(s64);
+            }
+        } else {
+            if dst.type.runtime_size == {
+              case 1; dst.value_pointer.(*u8 ).* = s64_value.(u8 );
+              case 2; dst.value_pointer.(*u16).* = s64_value.(u16);
+              case 4; dst.value_pointer.(*u32).* = s64_value.(u32);
+              case 8; dst.value_pointer.(*u64).* = s64_value.(u64);
+            }
         }
         return true;
         
       case .FLOAT;
-        src_ti := cast(*Type_Info_Integer) src.type;
-        dst_ti := cast(*Type_Info_Integer) dst.type;
+        src_ti := src.type.(*Type_Info_Integer);
+        dst_ti := dst.type.(*Type_Info_Integer);
         
         if !ALLOW_NARROWING_COERCIONS && src_ti.runtime_size > dst_ti.runtime_size  return false;
         
         // kind of silly to even use an intermediate here...
         f64_value: float64;
         if src.type.runtime_size == {
-            case 4; f64_value = cast(float64) (cast(*float32)src.value_pointer).*;
-            case 8; f64_value = cast(float64) (cast(*float64)src.value_pointer).*;
+            case 4; f64_value = src.value_pointer.(*float32).*.(float64);
+            case 8; f64_value = src.value_pointer.(*float64).*.(float64);
         }
         if dst.type.runtime_size == {
-            case 4; (cast(*float32)dst.value_pointer).* = cast(float32) f64_value;
-            case 8; (cast(*float64)dst.value_pointer).* = cast(float64) f64_value;
+            case 4; dst.value_pointer.(*float32).* = f64_value.(float32);
+            case 8; dst.value_pointer.(*float64).* = f64_value.(float64);
         }
         return true;
         
       case .ARRAY;
-        src_ti := cast(*Type_Info_Array) src.type;
-        dst_ti := cast(*Type_Info_Array) dst.type;
+        src_ti := src.type.(*Type_Info_Array);
+        dst_ti := dst.type.(*Type_Info_Array);
         
         if dst_ti.array_type   != .VIEW                // we only allow coercing from resizable or fixed arrays into array views
         || dst_ti.element_type != src_ti.element_type  // and of course, the element type here needs to match
             return false;
             
         dst_array: Array_View_64;
-        
         if src_ti.array_type == {
           case .RESIZABLE;
-            dst_array = cast(*Array_View_64) src.value_pointer; // Array_View_64 and Resizable_Array are spec'd to line up
+            dst_array = src.value_pointer.(*Array_View_64); // Array_View_64 and Resizable_Array are spec'd to line up
             return true;
             
           case .FIXED;
@@ -102,6 +121,5 @@ is_narrowing_int :: (dst_ti: *Type_Info_Integer, src_ti: *Type_Info_Integer) -> 
     } else {
         if dst_ti.signed && src_ti.runtime_size == dst_ti.runtime_size  return true;
     }
-    
     return false;
 }

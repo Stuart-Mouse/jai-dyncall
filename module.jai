@@ -741,14 +741,15 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
 //     return xx proc, type_info(type_of(proc));
 // }
 
+
+#load "bindings.jai";
+#load "dcaggr.jai";
+
 #scope_module
 
 #assert OS == .WINDOWS; 
 
 #import "Basic";
-
-#load "bindings.jai";
-#load "dcaggr.jai";
 
 #module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
 
@@ -787,5 +788,5 @@ maybe_coerce :: (dst: Any, src: Any) -> bool {
     }
 }
 
-// TODO: maybe move this to some utils file if we do keep it around
+// This is duplicated from my Utils module, but until and unless we need more stuff from there, I'd rather not make it a dependency.
 as_type :: inline (ti: *Type_Info) -> Type { return (*ti).(*Type).*; }
