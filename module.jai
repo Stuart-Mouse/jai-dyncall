@@ -660,45 +660,54 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
         }
     }
 */
-// MAKE_C_CALL :: ($proc_ptr: $P) -> (*void, *Type_Info_Procedure) #expand {
-//     #insert -> string {
-//         tip :: type_info(P);
-//         assert(tip.type == .PROCEDURE && !(tip.procedure_flags & .IS_C_CALL)); // unable to use a #modify here...
-        
-//         sb: String_Builder;
-        
-//         append(*sb, "proc :: (");
-//         if !(tip.procedure_flags & .HAS_NO_CONTEXT)  append(*sb, "_context: *#Context, ");
-//         for tip.argument_types {
-//             if it_index != 0  append(*sb, ", ");
-//             print_to_builder(*sb, "arg_%: %",  it_index+1, as_type(it));
-//         }
-//         for tip.return_types   print_to_builder(*sb, ", ret_%: *%", it_index+1, as_type(it));
-//         append(*sb, ") ");
-//         append(*sb, "#c_call {\n");
-        
-//         append(*sb, "\tpush_context _context.* {\n");
-        
-//         append(*sb, "\t\t");
-//         for 1..tip.return_types.count {
-//             print_to_builder(*sb, "ret_%.*", it);
-//             if it != tip.argument_types.count  append(*sb, ", ");
-//         }
-//         append(*sb, " = proc_ptr(");
-//         for tip.argument_types {
-//             if it_index != 0  append(*sb, ", ");
-//             print_to_builder(*sb, "arg_%", it_index+1);
-//         }
-//         append(*sb, ");\n");
-        
-//         append(*sb, "\t}\n");
-        
-//         append(*sb, "}\n");
-//         return builder_to_string(*sb);
-//     };
+MAKE_C_CALL :: ($proc_ptr: $P) -> Any_Proc #expand {
+    tip :: type_info(P);
     
-//     return xx proc, type_info(type_of(proc));
-// }
+    #insert -> string {
+        tip :: type_info(P);
+        assert(tip.type == .PROCEDURE && !(tip.procedure_flags & .IS_C_CALL)); // unable to use a #modify here...
+        
+        sb: String_Builder;
+        
+        // declare types for use in argument list
+        for tip.argument_types print_to_builder(*sb, "T_arg_% :: #run ((*tip.argument_types[%]).(*Type).*);\n", it_index+1, it_index);
+        for tip.return_types   print_to_builder(*sb, "T_ret_% :: #run ((*tip.return_types  [%]).(*Type).*);\n", it_index+1, it_index);
+        
+        has_context := !(tip.procedure_flags & .HAS_NO_CONTEXT);
+        
+        append(*sb, "proc :: (");
+        if has_context  append(*sb, "_context: *#Context, ");
+        
+        for tip.argument_types {
+            if it_index != 0  append(*sb, ", ");
+            print_to_builder(*sb, "arg_%1: T_arg_%1",  it_index+1);
+        }
+        for tip.return_types   print_to_builder(*sb, ", ret_%1: *T_ret_%1", it_index+1);
+        append(*sb, ") ");
+        append(*sb, "#c_call {\n");
+        
+        if has_context  append(*sb, "\tpush_context _context.* {\n");
+        
+        append(*sb, "\t\t");
+        for 1..tip.return_types.count {
+            print_to_builder(*sb, "ret_%.*", it);
+            if it != tip.argument_types.count  append(*sb, ", ");
+        }
+        append(*sb, " = proc_ptr(");
+        for tip.argument_types {
+            if it_index != 0  append(*sb, ", ");
+            print_to_builder(*sb, "arg_%", it_index+1);
+        }
+        append(*sb, ");\n");
+        
+        if has_context  append(*sb, "\t}\n");
+        
+        append(*sb, "}\n");
+        return builder_to_string(*sb);
+    };
+    
+    return .{ type_info(type_of(proc)), xx proc };
+}
 
 // MAKE_C_WRAPPER :: ($P: Type) -> (*void, *Type_Info_Procedure) #expand {
 //     #insert -> string {
@@ -746,6 +755,7 @@ push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *vo
 #assert OS == .WINDOWS; 
 
 #import "Basic";
+#import "Utils";
 
 #module_parameters () (ENABLE_COERCIONS: enum { DISABLED :: 0; MINIMAL; EXTENDED; } = .MINIMAL);
 
@@ -784,5 +794,5 @@ maybe_coerce :: (dst: Any, src: Any) -> bool {
     }
 }
 
-// This is duplicated from my Utils module, but until and unless we need more stuff from there, I'd rather not make it a dependency.
-as_type :: inline (ti: *Type_Info) -> Type { return (*ti).(*Type).*; }
+// // This is duplicated from my Utils module, but until and unless we need more stuff from there, I'd rather not make it a dependency.
+// as_type :: inline (ti: *Type_Info) -> Type { return (*ti).(*Type).*; }
