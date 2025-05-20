@@ -407,7 +407,7 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
       case .STRING;
         ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
         if !ag  return false;
-        dcArgAggr(vm, ag, value_pointer);  
+        dcArgAggr(vm, ag, value_pointer);
         
       case .STRUCT;
         if jai_call {
@@ -521,6 +521,11 @@ push_arguments :: (vm: *DCCallVM, arg_types: []*Type_Info, args: []Any, jai_call
               case;
                 assert(false, "invalid float size!");
             }
+            
+          case .STRING;
+            ag := find_or_make_and_register_DCaggr(type_info(Array_View_64));
+            if !ag  return false;
+            dcArgAggr(vm, ag, value_pointer);
             
           case .STRUCT;
             if jai_call {
@@ -708,43 +713,6 @@ MAKE_C_CALL :: ($proc_ptr: $P) -> Any_Proc #expand {
     
     return .{ type_info(type_of(proc)), xx proc };
 }
-
-// MAKE_C_WRAPPER :: ($P: Type) -> (*void, *Type_Info_Procedure) #expand {
-//     #insert -> string {
-//         tip :: type_info(P);
-//         assert(tip.type == .PROCEDURE && !(tip.procedure_flags & .IS_C_CALL)); // unable to use a #modify here...
-        
-//         sb: String_Builder;
-        
-//         append(*sb, "proc :: (proc_ptr: *");
-//         if !(tip.procedure_flags & .HAS_NO_CONTEXT)  append(*sb, ", _context: *#Context");
-//         for tip.argument_types print_to_builder(*sb, ", arg_%: %",  it_index+1, as_type(it));
-//         for tip.return_types   print_to_builder(*sb, ", ret_%: *%", it_index+1, as_type(it));
-//         append(*sb, ") ");
-//         append(*sb, "#c_call {\n");
-        
-//         append(*sb, "\tpush_context _context.* {\n");
-        
-//         append(*sb, "\t\t");
-//         for 1..tip.return_types.count {
-//             print_to_builder(*sb, "ret_%.*", it);
-//             if it != tip.argument_types.count  append(*sb, ", ");
-//         }
-//         append(*sb, " = proc_ptr(");
-//         for tip.argument_types {
-//             if it_index != 0  append(*sb, ", ");
-//             print_to_builder(*sb, "arg_%", it_index+1);
-//         }
-//         append(*sb, ");\n");
-        
-//         append(*sb, "\t}\n");
-        
-//         append(*sb, "}\n");
-//         return builder_to_string(*sb);
-//     };
-    
-//     return xx proc, type_info(type_of(proc));
-// }
 
 
 #load "bindings.jai";
