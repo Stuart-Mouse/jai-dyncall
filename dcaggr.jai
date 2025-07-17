@@ -6,45 +6,45 @@
     These get built automatically from type info.
 */
 
-DCaggr_lookup_table: [..] struct { ti: *Type_Info; ag: *DCaggr; };
+DCaggr_lookup_table: [..] struct { info: *Type_Info; aggr: *DCaggr; };
 
-make_DCaggr :: (ti: *Type_Info) -> *DCaggr {
-    if ti.type == {
+make_DCaggr :: (info: *Type_Info) -> *DCaggr {
+    if info.type == {
       case .ARRAY;
-        ti_array := cast(*Type_Info_Array) ti;
+        ti_array := cast(*Type_Info_Array) info;
         if ti_array.array_type == .FIXED {
-            return _make_DCaggr_array(cast(*Type_Info_Array)ti);
+            return _make_DCaggr_array(cast(*Type_Info_Array)info);
         }
       case .STRUCT;
-        return _make_DCaggr_struct(cast(*Type_Info_Struct)ti);
+        return _make_DCaggr_struct(cast(*Type_Info_Struct)info);
     }
-    log("Invalid type given in make_DCaggr()!\n");
+    log("Error: Invalid type given in make_DCaggr!\n");
     return null;
 }
 
-register_DCaggr :: inline (ti: *Type_Info, ag: *DCaggr) {
-    if !ti || !ag {
-        log("attempted to register invalid DCaggr\n");
+register_DCaggr :: inline (info: *Type_Info, aggr: *DCaggr) {
+    if !info || !aggr {
+        log("Error: Attempted to register invalid DCaggr\n");
         return;
     }
-    array_add(*DCaggr_lookup_table, .{ ti, ag });
+    array_add(*DCaggr_lookup_table, .{ info, aggr });
 }
 
-find_DCaggr :: inline (ti: *Type_Info) -> *DCaggr {
-    for DCaggr_lookup_table  if it.ti == ti  return it.ag;
+find_DCaggr :: inline (info: *Type_Info) -> *DCaggr {
+    for DCaggr_lookup_table  if it.info == info  return it.aggr;
     return null;
 }
 
 // I basically just use this one procedure everywhere that I deal with DCAggr objects internally.
 // I haven't needed to use the above procedures directly, but they are still exposed to the user.
 // But if you really want to deal with the DCaggr objects yourself then chances are you'd not be using this module in the first place.
-find_or_make_and_register_DCaggr :: (ti: *Type_Info) -> *DCaggr {
-    ag := find_DCaggr(ti);
-    if !ag {
-        ag = make_DCaggr(ti);
-        register_DCaggr(ti, ag);
+find_or_make_and_register_DCaggr :: (info: *Type_Info) -> *DCaggr {
+    aggr := find_DCaggr(info);
+    if !aggr {
+        aggr = make_DCaggr(info);
+        register_DCaggr(info, aggr);
     }
-    return ag;
+    return aggr;
 }
 
 #scope_file
@@ -57,45 +57,45 @@ find_or_make_and_register_DCaggr :: (ti: *Type_Info) -> *DCaggr {
     But if the array is the top-level type so-to-speak, then we need to make a DCaggr for it.
     Maybe in the future I can come up with some better way to minimize the need for this further...
 */
-_make_DCaggr_array :: (ti: *Type_Info_Array) -> *DCaggr {
-    ag := dcNewAggr(cast(u64)ti.array_count, cast(u64)ti.runtime_size);
+_make_DCaggr_array :: (info: *Type_Info_Array) -> *DCaggr {
+    aggr := dcNewAggr(cast(u64)info.array_count, cast(u64)info.runtime_size);
     success := false;
-    defer if !success dcFreeAggr(ag);
+    defer if !success dcFreeAggr(aggr);
     
     // basically a DCaggr struct, but with only one member (the fixed size array)
-    if !_add_DCaggr_field(ag, ti, 0)  return null;
+    if !_add_DCaggr_field(aggr, info, 0)  return null;
     
-    dcCloseAggr(ag);
+    dcCloseAggr(aggr);
     success = true;
-    return ag;
+    return aggr;
 }
 
-_make_DCaggr_struct :: (ti: *Type_Info_Struct) -> *DCaggr {
-    ag := dcNewAggr(cast(u64)ti.members.count, cast(u64)ti.runtime_size);
+_make_DCaggr_struct :: (info: *Type_Info_Struct) -> *DCaggr {
+    aggr := dcNewAggr(cast(u64)info.members.count, cast(u64)info.runtime_size);
     success := false;
-    defer if !success dcFreeAggr(ag);
+    defer if !success dcFreeAggr(aggr);
     
     last_offset := 0; // hacky fix to skip adding fields with #place directives, as dyncall doesn't seem to like overlapping fields in a struct definition (reasonably so)
-    for ti.members {
+    for info.members {
         if it.flags & .CONSTANT  continue;
         if it.offset_in_bytes < last_offset  continue; 
         
-        if !_add_DCaggr_field(ag, it.type, it.offset_in_bytes)  return null;
+        if !_add_DCaggr_field(aggr, it.type, it.offset_in_bytes)  return null;
         
         last_offset = it.offset_in_bytes + it.type.runtime_size;
     }
     
-    dcCloseAggr(ag);
+    dcCloseAggr(aggr);
     success = true;
-    return ag;
+    return aggr;
 }
 
-_add_DCaggr_field :: (ag: *DCaggr, ti: *Type_Info, offset_in_bytes: int) -> bool {
+_add_DCaggr_field :: (aggr: *DCaggr, info: *Type_Info, offset_in_bytes: int) -> bool {
     sigchar  : DCsigchar = 0;
     arrcount : DCsize    = 1;
     
     // Handle fixed-size arrays by multiplying arrcount, updating elem_type
-    elem_type := ti;
+    elem_type := info;
     while true {
         if elem_type.type == .ARRAY {
             ti_array := cast(*Type_Info_Array) elem_type;
@@ -135,7 +135,7 @@ _add_DCaggr_field :: (ag: *DCaggr, ti: *Type_Info, offset_in_bytes: int) -> bool
         ag_nested := find_or_make_and_register_DCaggr(ti_nested);
         if !ag_nested  return false;
         
-        dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_nested);
+        dcAggrField(aggr, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_nested);
         return true; // We don't want to run the common case below.
         
       case .ARRAY;
@@ -153,12 +153,12 @@ _add_DCaggr_field :: (ag: *DCaggr, ti: *Type_Info, offset_in_bytes: int) -> bool
         }
         
         if !ag_array  return false;
-        dcAggrField(ag, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_array);
+        dcAggrField(aggr, DC_SIGCHAR_AGGREGATE, cast(s32)offset_in_bytes, arrcount, ag_array);
         return true; // We don't want to run the common case below.
     }
     
     // Common case for primitive types, no need to duplicate the call up in each case.
     assert(sigchar != 0, "Sigchar was not assigned a value!");
-    dcAggrField(ag, sigchar, cast(s32)offset_in_bytes, arrcount);
+    dcAggrField(aggr, sigchar, cast(s32)offset_in_bytes, arrcount);
     return true;
 }
