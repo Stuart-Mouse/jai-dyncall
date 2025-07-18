@@ -50,7 +50,7 @@ DC_SIGCHAR_CC_SYSCALL          :: #char "$";
 
 // custom aliases for explicitly sized numeric types
 // arguably, we don't really need these because the DC types are already typedefs of standard Jai types
-// but the ones for the procedures are actually kind of nice and it felt wierd not to do the types themselvs to match
+// but the ones for the procedures are actually kind of nice and it felt wierd not to do the types to match
 // maybe I will remove these in the future. I'm still somewhat considering trying to implement a different backend with libffi.
 
 DCint8        :: DCchar;
@@ -79,77 +79,31 @@ dcCallInt64   :: dcCallLongLong;
 dcCallFloat32 :: dcCallFloat;
 dcCallFloat64 :: dcCallDouble;
 
-// ========== Real Stuff ==========
-
-// TODO: decent function to wrap both C and Jai calls.
-// DYNAMIC_CALL :: (proc: Any, args: ..Any) -> [] Any {
-//     if (ti_proc.procedure_flags & .IS_C_CALL) {
-        
-//         return Any.[];
-//     }
-// }
-
+// ========== Implementation Notes ==========
 
 /*
-    Jai calling convention notes
+    IMPORTANT: Dyncall-ing Jai procedures totally doesn't work at all with the x64 backend!
+    So in the mean time your choices are to use the LLVM backend, where Jai uses the C calling convention behind the scenes, or you can wrap your Jai procedures with #c_call wrappers.
     
-    Jai calls totally don't work at all with the x64 backend!
-    So for the mean time your choices are to use the LLVM backend, where Jai uses the C calling convention behind the scenes, or you can wrap your Jai procedures with #c_call wrappers
-    If Jon ever decides to change things in the LLVM backend such that it no longer uses the C calling convention and breaks this entire module, then I will most likely go ahead and write a little macro that will wrap your Jai procedures in #c_call proceudres that take the additional context pointer and just fix it that way.
-    Really, I ought to go ahead and do that anyways so that this module actually works in the x64 backend...        TODO!
-    
-    If we de-sugared Jai calls into C calls, they would look something like this:
-        void procedure(Context* context, ..T arguments, ..void* return_values);
-    
-    The context pointer is passed as the first argument.
-    Then we pass all normal arguments.
-    Lastly, we pass pointers to all return values.
-    
-    Passing Arguments:
+    Passing Arguments to Jai Procedures:
         Structs are always passed by pointer in Jai calls.
         All other types are passed by value, including all array types.
-    
-    Footnotes: 
         For #c_call procedures, we actually do pass structs by value.
-        Currently, Jai calls don't work on the x64 backend. 
-            I will have to look into fixing this, 
-            but it may not be trivial if the calling convention 
-            is meaningfully different than C's.
         
-    
-    
-    
+        If we de-sugared Jai calls into C calls, they would look something like this:
+            void procedure(Context* context, ..T arguments, ..void* return_values);
+        
+        The context pointer is passed as the first argument.
+        Then we pass all normal arguments.
+        Lastly, we pass pointers to all return values.
+        
+    TODO: 
+        - create a test suite
+        - think about ways to improve #c_call wrappers
 */
 
 
-/*
-    The setup and execution of the dyncall VM have been split up here so that one can defer calling the VM after pushing args.
-    I am testing this with a Go-style defer that works at function scope instead of block scope, which should be a good test.
-    
-    NOTE: The VM returned by setup_vm_jai will need to be freed manually!
-    
-    This has me thinking that we may want to have some better data structure 
-    that wraps the dyncall VM pointer and holds the procedure pointer and type info
-    so that the user does not have to manage those separately.
-    
-    Doing the setup and execution of a dyncall separately comes with a lot of extra considerations.
-    And currently, I don't have anything here that accounts for those considerations.
-    The plan is that doing the Go Defer stuff will help me to develop the proper affordances, and a nice interface to do this kind of thing.
-    But at the moment, it's just 'user beware'.
-    
-    It may be problematic to even push arguments here, since we have to push the context first, and that's maybe the most complicated part of all.
-    One solution would be to create a context in temp storage or on the heap that we get a pointer to here, and then don't fill in until we execute the call.
-    But I'm not sure if that's the most elegant solution.
-    Perhaps we can smooth over some of the complications by just making a good wrapper struct around *DCCallVM.
-    
-    LATER...
-    After having used dyncall for a while in Lead Sheets, 
-    I've realized that there's really not much point having most of these higher-level procedures
-    since most non-trivial use cases will actually want to manage the vm on their own.
-    But, since these procedures are still useful for doing basic testing and because they may be 
-    useful as a reference for those who have not used dyncall before, I'm leaving them in the module.
-*/
-
+// ========== Convenience Wrappers ==========
 
 // Standard procedure for calling any procedure type. 
 // Will support coercion of arguments if user has enabled coercions.
