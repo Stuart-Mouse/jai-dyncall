@@ -105,6 +105,142 @@ dcCallFloat64 :: dcCallDouble;
 
 // ========== Convenience Wrappers ==========
 
+/*
+    The Dyncall_VM struct acts as a sort of wrapper around the DCCallVM,
+    holding some additional state so that it can provide extra checking
+    while also allowing the user to manually push arguments if they wish to do so.
+    
+    While this module also provides simple procedures to push a whole array of arguments automatically,
+    there are many cases where the user may want to manually coerce or modify arguments as they are passed.
+    
+    Return values don't have any kind of support for manual pushing or coercions,
+    but if you want to handle return values specially, or you aren't certain of the return type before 
+    executing some call, you can use do_dyncall_a or execute_call_a to allocate the results as an [] Any.
+*/
+
+Dyncall_VM :: struct {
+    __vm:              *DCCallVM;
+    target:            C_Call_Wrapper;
+    arguments_pushed:  int;
+    flags:             Flags;
+    return_aggr:       *DCaggr;
+    
+    Flags :: enum_flags {
+        INITIALIZED;
+        USING_WRAPPER;
+        CALL_STARTED;
+    };
+}
+
+new_vm :: (size := 2048, mode := DC_CALL_C_DEFAULT) -> Dyncall_VM {
+    vm: Dyncall_VM;
+    init(vm);
+    return vm;
+}
+
+init :: (using vm: *Dyncall_VM, size := 2048, mode := DC_CALL_C_DEFAULT) {
+    __vm = dcNewCallVM(size);
+    dcMode(__vm, mode);
+    dcReset(__vm);  
+    flags |= .INITIALIZED;
+}
+
+deinit :: (using vm: *Dyncall_VM) {
+    if vm  dcFree(vm);
+}
+
+get_error :: (using vm: *DCCallVM) -> string {
+    // TODO: maybe provide more context?
+    error := dcGetError(__vm);
+    return error;
+}
+
+// will log error if present and reset the vm
+check_error :: (using vm: *DCCallVM) -> bool {
+    error := get_error(vm);
+    if error {
+        log("Dyncall Internal Error: %", error);
+        reset(vm);
+        return false;
+    }
+    return true;
+}
+
+reset :: (using vm: *DCCallVM, mode := DC_CALL_C_DEFAULT) {
+    bvm := __vm;
+    vm = .{};
+    __vm = bvm;
+    dcMode(__vm, mode);
+    dcReset(__vm);
+    flags |= .INITIALIZED;
+}
+
+begin_call :: (vm: *Dyncall_VM, procedure: Any) -> bool {
+    if flags & .CALL_STARTED {
+        log("Error: cannot begin call, call was already started.");
+        reset(vm);
+        return false;
+    }
+    defer  if check_error(vm)  return false;
+    
+    if procedure.type == xx C_Call_Wrapper {
+        flags |= .USING_WRAPPER;
+        
+        dcArgPointer(vm, xx jai_proc.pointer);
+        if !(jai_proc.procedure_flags & .HAS_NO_CONTEXT) { 
+            assert(context_pointer != null);
+            dcArgPointer(vm, xx context_pointer);
+        }
+    } else {
+        proc := Any_Proc.from(procedure);
+        set(target, proc);
+        
+        if proc.procedure_flags & .IS_C_CALL {
+            assert(proc.return_types.count <= 1);
+            ok:, return_aggr = begin_c_call(vm, proc, ifx proc.return_types then proc.return_types[0] else xx void);
+            if !ok  return false;
+        } else {
+            if !(proc.procedure_flags & .HAS_NO_CONTEXT)  dcArgPointer(vm, *context);
+        }
+    }
+    
+    flags |= .CALL_STARTED;
+    return true;
+}
+
+execute_call :: (vm: *Dyncall_VM, return_values: ..Any) -> bool {
+    if !(flags & .CALL_STARTED) {
+        log("Error: cannot execute call before calling begin_call.");
+        reset(vm);
+        return false;
+    }
+    if arguments_pushed != proc_info.argument_types.count {
+        log("Error: Incorrect number of arguents passed to call. Expected %, got %.", proc_info.argument_types.count, arguments_pushed);
+        reset(vm);
+        return false;
+    }
+    defer  if get_error(vm)  return false;
+    
+    if !typecheck_return_values(proc.proc_info, ..return_values)  return false;
+    
+    if flags & .USING_WRAPPER {
+        dcCallVoid(vm, xx target.wrapper.wrapper_proc.pointer);
+    } else {
+        proc := target.procedure;
+        assert(proc != null);
+        
+        if proc.procedure_flags & .IS_C_CALL {
+            return_value := ifx return_values then return_values[0] else Void_Any;
+            if !execute_c_call(__vm, target.procedure.pointer, return_value, aggr)  return false;
+        } else {
+            for return_values  dcArgPointer(vm, it.value_pointer);
+            dcCallVoid(vm, xx target.procedure.pointer);
+        }
+    }
+    
+    return true;
+}
+
 // Standard procedure for calling any procedure type. 
 // Will support coercion of arguments if user has enabled coercions.
 do_dyncall :: (vm: *DCCallVM, procedure: Any, arguments: [] Any, return_values: [] Any) -> bool {
@@ -112,28 +248,29 @@ do_dyncall :: (vm: *DCCallVM, procedure: Any, arguments: [] Any, return_values: 
     defer {
         error := dcGetError(vm);
         if error {
-            log("Error: %", error);
+            log("Dyncall Internal Error: %", error);
             return false;
         }
     }
     
     proc := Any_Proc.from(procedure);
+    if !typecheck_arguments    (proc.proc_info, ..arguments    )  return false;
+    if !typecheck_return_values(proc.proc_info, ..return_values)  return false;
+    
     if proc.procedure_flags & .IS_C_CALL {
         assert(proc.return_types.count <= 1); // sanity check
-        
-        if !typecheck_return_values(proc.proc_info, ..return_values)  return false;
         return_value := ifx return_values then return_values[0] else Void_Any;
         
         // For a C call, we may have to start an aggr call before pushing arguments.
-        ok, aggr := begin_c_call(vm, proc, return_value.type);
+        ok, aggr := begin_c_call(vm, return_value.type);
         if !ok  return false;
-        if !push_arguments(vm, proc.argument_types, arguments)  return false;
-        if !execute_c_call(vm, proc, return_value, aggr)  return false;
+        
+        if !push_all_arguments(vm, proc.argument_types, arguments)  return false;
+        if !execute_c_call(vm, proc.pointer, return_value, aggr)  return false;
     } else {
         if !(proc.procedure_flags & .HAS_NO_CONTEXT)  dcArgPointer(vm, *context);
-        if !push_arguments(vm, proc.argument_types, arguments, jai_call = true)  return false;
+        if !push_all_arguments(vm, proc.argument_types, arguments, jai_call = true)  return false;
         
-        if !typecheck_return_values(proc.proc_info, ..return_values)  return false;
         for return_values  dcArgPointer(vm, it.value_pointer);
         dcCallVoid(vm, xx proc.pointer);
     }
@@ -178,13 +315,12 @@ do_dyncall_t :: (vm: *DCCallVM, procedure: Any, arguments: ..Any) -> bool, [] An
 }
 
 // Performs a dyncall for a Jai procedure using a C_Call_Wrapper.
-// NOTE: Currently does not handle argument coercion because there are some fiddly details with this wrapper stuff that I need to iron out first.
-do_dyncall :: (vm: *DCCallVM, using wrapper: C_Call_Wrapper, arguments: [] Any, return_values: [] Any) -> bool {
+do_dyncall :: (vm: *DCCallVM, using c_call_wrapper: C_Call_Wrapper, arguments: [] Any, return_values: [] Any) -> bool {
     dcReset(vm);
     defer {
         error := dcGetError(vm);
         if error {
-            log("Error: %", error);
+            log("Dyncall Internal Error: %", error);
             return false;
         }
     }
@@ -195,30 +331,30 @@ do_dyncall :: (vm: *DCCallVM, using wrapper: C_Call_Wrapper, arguments: [] Any, 
     // But then again, that's sort of their own fault and we shouldn't have to check the wrapper 
     //     against the Jai proc type info every time we want to make a call.
     
-    dcArgPointer(vm, xx jai_proc.pointer);
-    if !(jai_proc.procedure_flags & .HAS_NO_CONTEXT) { 
+    dcArgPointer(vm, xx procedure.pointer);
+    if !(procedure.procedure_flags & .HAS_NO_CONTEXT) { 
         assert(context_pointer != null);
         dcArgPointer(vm, xx context_pointer);
     }
     
-    if !typecheck_arguments(jai_proc.proc_info, ..arguments)  return false;
-    for arguments  if !push_any_argument(vm, it, jai_call = true)  return false;
+    if !typecheck_arguments(procedure.proc_info, ..arguments)  return false;
+    if !push_all_arguments(vm, procedure.proc_info.argument_types, arguments, jai_call = true)  return false;
     
-    if !typecheck_return_values(jai_proc.proc_info, ..return_values)  return false;
+    if !typecheck_return_values(procedure.proc_info, ..return_values)  return false;
     for return_values  dcArgPointer(vm, it.value_pointer);
     
-    dcCallVoid(vm, xx wrapper_proc.pointer);
+    dcCallVoid(vm, xx wrapper.pointer);
     
     return true;
 }
 
 #scope_module
 
-begin_c_call :: (vm: *DCCallVM, proc: Any_Proc, return_type: *Type_Info) -> bool, *DCaggr {
-    assert(proc.return_types.count <= 1); // sanity check
+begin_c_call :: (vm: *DCCallVM, return_type: *Type_Info) -> bool, *DCaggr {
+    if !return_type  return true, null;
     
-    aggr_type := void.(*Type_Info);
-    aggr: *DCaggr;
+    aggr_type:  *Type_Info;
+    aggr:       *DCaggr;
     
     if return_type.type == {
       case .STRUCT;
@@ -233,41 +369,39 @@ begin_c_call :: (vm: *DCCallVM, proc: Any_Proc, return_type: *Type_Info) -> bool
           case .FIXED;      aggr_type = return_type;
         }
     }
-    if aggr_type != xx void {
+    if aggr_type {
         aggr = find_or_make_and_register_DCaggr(aggr_type);
         dcBeginCallAggr(vm, aggr);
     }
     
-    return true, aggr;
+    return !dcGetError(vm), aggr;
 }
 
 // This is #scope_module for now, since the way we pass aggr_type 
 //     is a bit odd and I may refactor this later.
 // If we started the call with dcBeginCallAggr, then we need to call dcCallAggr with the same aggr object.
-execute_c_call :: (vm: *DCCallVM, proc: Any_Proc, return_value: Any, aggr: *DCaggr = null) -> bool {
+execute_c_call :: (vm: *DCCallVM, proc_ptr: *void, return_value: Any, aggr: *DCaggr = null) -> bool {
     if return_value.type.type == {
       case .VOID;
-        dcCallVoid(vm, xx proc.pointer);
+        dcCallVoid(vm, xx proc_ptr);
         
       case .POINTER;
-        dcCallPointer(vm, xx proc.pointer);
+        dcCallPointer(vm, xx proc_ptr);
         
       case .ENUM; #through;
       case .BOOL; #through;
       case .INTEGER;
         if return_value.type.runtime_size == {
-            case 1; return_value.value_pointer.(*DCint8 ).* = dcCallInt8 (vm, xx proc.pointer); 
-            case 2; return_value.value_pointer.(*DCint16).* = dcCallInt16(vm, xx proc.pointer); 
-            case 4; return_value.value_pointer.(*DCint32).* = dcCallInt32(vm, xx proc.pointer); 
-            case 8; return_value.value_pointer.(*DCint64).* = dcCallInt64(vm, xx proc.pointer); 
-            case;   assert(false, "Invalid integer size!");
+            case 1; return_value.value_pointer.(*DCint8 ).* = dcCallInt8 (vm, xx proc_ptr); 
+            case 2; return_value.value_pointer.(*DCint16).* = dcCallInt16(vm, xx proc_ptr); 
+            case 4; return_value.value_pointer.(*DCint32).* = dcCallInt32(vm, xx proc_ptr); 
+            case 8; return_value.value_pointer.(*DCint64).* = dcCallInt64(vm, xx proc_ptr); 
         }
         
       case .FLOAT;
         if return_value.type.runtime_size == {
-          case 4; return_value.value_pointer.(*DCfloat32).* = dcCallFloat32(vm, xx proc.pointer); 
-          case 8; return_value.value_pointer.(*DCfloat64).* = dcCallFloat64(vm, xx proc.pointer); 
-           case;   assert(false, "Invalid float size!");
+          case 4; return_value.value_pointer.(*DCfloat32).* = dcCallFloat32(vm, xx proc_ptr); 
+          case 8; return_value.value_pointer.(*DCfloat64).* = dcCallFloat64(vm, xx proc_ptr); 
         }
         
       case .ARRAY;
@@ -280,7 +414,7 @@ execute_c_call :: (vm: *DCCallVM, proc: Any_Proc, return_value: Any, aggr: *DCag
         
       case .STRUCT;
         assert(aggr != null);
-        dcCallAggr(vm, xx proc.pointer, aggr, xx return_value.value_pointer);
+        dcCallAggr(vm, xx proc_ptr, aggr, xx return_value.value_pointer);
     }
     return true;
 }
@@ -319,11 +453,134 @@ typecheck_return_values :: (proc_info: *Type_Info_Procedure, return_values: ..An
     return true;
 }
 
-push_any_argument :: inline (vm: *DCCallVM, any: Any, jai_call := false) -> bool {
-    return push_argument(vm, any.type, any.value_pointer, jai_call);
+// ========== Pushing Arguments ==========
+
+// This version of push_argument will ensure that the proper number and types of arguments are passed
+push_argument :: (using vm: *Dyncall_VM, any: Any, jai_call := false) -> bool {
+    if arguments_pushed >= procedure.argument_types.count {
+        log("Error: Attempted to pass too many arguments for call.");
+        return false;
+    }
+    expected_type := procedure.argument_types[arguments_pushed];
+    if !push_argument(__vm, expected_type, any) return false;
+    
+    arguments_pushed += 1;
+    return true;
 }
 
-push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_call := false) -> bool {
+push_argument :: (vm: *DCCallVM, expected_type: *Type_Info, any: Any, jai_call := false) -> bool {
+    if expected_type.type == {
+      case .POINTER;
+        // TODO: add support for passing pointers of subtypes as base type
+        if any.type != expected_type {
+            log("Error: argument type '%' does not match expected type '%'.", as_type(any.type), as_type(expected_type));
+            return false;
+        }
+        dcArgPointer(vm, any.value_pointer.(*DCpointer).*); 
+        
+      case .ENUM; #through;
+      case .BOOL; #through;
+      case .INTEGER;
+        if expected_type.runtime_size == {
+          case 1; 
+            val: DCint8;
+            if !maybe_coerce(val, any)  return false;
+            dcArgInt8(vm, val); 
+            
+          case 2; 
+            val: DCint16;
+            if !maybe_coerce(val, any)  return false;
+            dcArgInt16(vm, val); 
+            
+          case 4; 
+            val: DCint32;
+            if !maybe_coerce(val, any)  return false;
+            dcArgInt32(vm, val); 
+            
+          case 8; 
+            val: DCint64;
+            if !maybe_coerce(val, any)  return false;
+            dcArgInt64(vm, val); 
+        }
+        
+      case .FLOAT;
+        if expected_type.runtime_size == {
+          case 4; 
+            val: DCfloat32;
+            if !maybe_coerce(val, any)  return false;
+            dcArgFloat32(vm, val); 
+            
+          case 8; 
+            val: DCfloat64;
+            if !maybe_coerce(val, any)  return false;
+            dcArgFloat64(vm, val); 
+        }
+        
+      case .STRING;
+        if any.type != expected_type {
+            log("Error: argument type '%' does not match expected type '%'.", as_type(any.type), as_type(expected_type));
+            return false;
+        }
+        aggr := find_or_make_and_register_DCaggr(xx Array_View_64);
+        if !aggr  return false;
+        dcArgAggr(vm, aggr, any.value_pointer);
+        
+      case .STRUCT;
+        if any.type != expected_type {
+            log("Error: argument type '%' does not match expected type '%'.", as_type(any.type), as_type(expected_type));
+            return false;
+        }
+        if jai_call {
+            dcArgPointer(vm, any.value_pointer); 
+        } else {
+            aggr := find_or_make_and_register_DCaggr(xx any.type);
+            if !aggr  return false;
+            dcArgAggr(vm, aggr, any.value_pointer);
+        }
+        
+      case .ARRAY;
+        if any.type != expected_type {
+            log("Error: argument type '%' does not match expected type '%'.", as_type(any.type), as_type(expected_type));
+            return false;
+        }
+        array_info := any.type.(*Type_Info_Array);
+        if array_info.array_type == {
+          case .VIEW;
+            aggr := find_or_make_and_register_DCaggr(xx Array_View_64);
+            if !aggr  return false;
+            dcArgAggr(vm, aggr, any.value_pointer);
+            
+          case .RESIZABLE;
+            aggr := find_or_make_and_register_DCaggr(xx Resizable_Array);
+            if !aggr  return false;
+            dcArgAggr(vm, aggr, any.value_pointer);
+            
+          case;
+            if !jai_call {
+                log("Error: cannot pass a fixed array to a #c_call procedure!\n");
+                return false;
+            }
+            
+            aggr := find_or_make_and_register_DCaggr(xx array_info);
+            if !aggr  return false;
+            dcArgAggr(vm, aggr, any.value_pointer);
+        }
+    }
+    return true;
+}
+
+push_all_arguments :: inline (vm: *DCCallVM, expected_types: [] *Type_Info, arguments: [] Any, jai_call := false) -> bool {
+    if expected_types.count != arguments.count {
+        log("Error: argument count did not match. Expected %, got %", expected_types.count, arguments.count);
+        return false;
+    }
+    for arguments {
+        if !push_argument(vm, expected_types[it_index], it, jai_call)  return false;
+    }
+    return true;
+}
+
+push_argument_nocheck :: (vm: *DCCallVM, any: Any, jai_call := false) -> bool {
     if type.type == {
       case .POINTER;
         dcArgPointer(vm, value_pointer.(*DCpointer).*); 
@@ -387,172 +644,6 @@ push_argument :: (vm: *DCCallVM, type: *Type_Info, value_pointer: *void, jai_cal
       case;
         log("Error: unable to push argument of type %\n", as_type(type));
         return false;
-    }
-    
-    return true;
-}
-
-// TODO: add some bounds checking when indexing args
-// the arg_types array is provided for the sake of doing type checking and type coercions, based on the argument_types array in a Type_Info_Procedure
-push_arguments :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] Any, jai_call := false) -> bool {
-    for arg_type: arg_types {
-        arg_any := args[it_index];
-        
-        if arg_type.type == {
-          case .POINTER;
-            if arg_any.type.type != .POINTER return false;
-            dcArgPointer(vm, arg_any.value_pointer.(*DCpointer).*); 
-            
-          case .ENUM; #through;
-          case .BOOL; #through;
-          case .INTEGER;
-            if arg_type.runtime_size == {
-              case 1; 
-                val: DCint8;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgInt8(vm, val); 
-                
-              case 2; 
-                val: DCint16;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgInt16(vm, val); 
-                
-              case 4; 
-                val: DCint32;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgInt32(vm, val); 
-                
-              case 8; 
-                val: DCint64;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgInt64(vm, val); 
-                
-              case;
-                assert(false, "invalid integer size!");
-            }
-            
-          case .FLOAT;
-            if arg_type.runtime_size == {
-              case 4; 
-                val: DCfloat32;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgFloat32(vm, val); 
-                
-              case 8; 
-                val: DCfloat64;
-                if !maybe_coerce(val, arg_any)  return false;
-                dcArgFloat64(vm, val); 
-                
-              case;
-                assert(false, "invalid float size!");
-            }
-            
-          case .STRING;
-            aggr := find_or_make_and_register_DCaggr(type_info(Array_View_64));
-            if !aggr  return false;
-            dcArgAggr(vm, aggr, arg_any.value_pointer);
-            
-          case .STRUCT;
-            if jai_call {
-                dcArgPointer(vm, arg_any.value_pointer); 
-            } else {
-                aggr := find_or_make_and_register_DCaggr(xx arg_type);
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_any.value_pointer);
-            }
-            
-          case .ARRAY;
-            ti_array := arg_type.(*Type_Info_Array);
-            if ti_array.array_type == {
-              case .VIEW;
-                aggr := find_or_make_and_register_DCaggr(type_info(Array_View_64));
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_any.value_pointer);
-                
-              case .RESIZABLE;
-                aggr := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_any.value_pointer);
-                
-              case;
-                if !jai_call {
-                    log("Error: cannot pass a fixed array to a #c_call procedure!\n");
-                    return false;
-                }
-                
-                aggr := find_or_make_and_register_DCaggr(xx ti_array);
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_any.value_pointer);
-            }
-        }
-    }
-    
-    return true;
-}
-
-// a version of push_arguments where each arg is *void instead of Any, meaning no type checking will be done
-// and of course, no type coercion can be done since we don't know what the source type is for each argument
-push_arguments_nocheck :: (vm: *DCCallVM, arg_types: [] *Type_Info, args: [] *void, jai_call := false) -> (bool) {
-    assert(arg_types.count == args.count);
-    for arg_type: arg_types {
-        arg_ptr := args[it_index];
-        
-        if arg_type.type == {
-          case .POINTER;
-            dcArgPointer(vm, arg_ptr.(*DCpointer).*); 
-            
-          case .ENUM; #through;
-          case .BOOL; #through;
-          case .INTEGER;
-            if arg_type.runtime_size == {
-              case 1; dcArgInt8 (vm, arg_ptr.(*DCint8 )); 
-              case 2; dcArgInt16(vm, arg_ptr.(*DCint16)); 
-              case 4; dcArgInt32(vm, arg_ptr.(*DCint32)); 
-              case 8; dcArgInt64(vm, arg_ptr.(*DCint64)); 
-              case;
-                assert(false, "invalid integer size!");
-            }
-            
-          case .FLOAT;
-            if arg_type.runtime_size == {
-              case 4; dcArgFloat32(vm, arg_ptr.(*DCfloat32)); 
-              case 8; dcArgFloat64(vm, arg_ptr.(*DCfloat32)); 
-              case;
-                assert(false, "invalid float size!");
-            }
-            
-          case .STRUCT;
-            if jai_call {
-                dcArgPointer(vm, arg_ptr);   
-            } else {
-                aggr := find_or_make_and_register_DCaggr(xx arg_type);
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_ptr);  
-            }
-            
-          case .ARRAY;
-            ti_array := arg_type.(*Type_Info_Array);
-            if ti_array.array_type == {
-              case .VIEW;
-                aggr := find_or_make_and_register_DCaggr(type_info(Array_View_64));
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_ptr);  
-                
-              case .RESIZABLE;
-                aggr := find_or_make_and_register_DCaggr(type_info(Resizable_Array));
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_ptr);  
-                
-              case;
-                if !jai_call {
-                    log("Error: cannot pass a fixed array to a #c_call procedure!\n");
-                    return false;
-                }
-                aggr := find_or_make_and_register_DCaggr(xx ti_array);
-                if !aggr  return false;
-                dcArgAggr(vm, aggr, arg_ptr);  
-            }
-        }
     }
     
     return true;
@@ -633,8 +724,8 @@ make_c_call_wrapper :: (jai_proc: $P, _context: *#Context) -> C_Call_Wrapper #mo
     };
     
     return .{ 
-        wrapper_proc    = Any_Proc.from(wrapper_proc),
-        jai_proc        = Any_Proc.from(jai_proc),
+        wrapper         = Any_Proc.from(wrapper_proc),
+        procedure       = Any_Proc.from(jai_proc),
         context_pointer = _context,
     };
 }
@@ -645,8 +736,8 @@ make_c_call_wrapper :: (jai_proc: $P, _context: *#Context) -> C_Call_Wrapper #mo
         since some info is lost about the original procedure when generating the wrapper.
 */
 C_Call_Wrapper :: struct {
-    wrapper_proc:       Any_Proc;
-    jai_proc:           Any_Proc;
+    wrapper:            Any_Proc;
+    procedure:          Any_Proc;
     context_pointer:    *#Context;
 }
 
