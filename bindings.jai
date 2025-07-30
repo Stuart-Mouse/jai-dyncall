@@ -236,28 +236,6 @@ dlSymsNameFromValue :: (pSyms: *DLSyms, value: *void) -> *u8 #foreign dynload_s;
     dyncall_s :: #library,no_dll "windows/dyncall_s";
     dyncallback_s :: #library,no_dll "windows/dyncallback_s";
     dynload_s :: #library,no_dll "windows/dynload_s";
-} else #if OS == .LINUX {
-    dyncall_s :: #library,no_dll "linux/dyncall_s";
-    dyncallback_s :: #library,no_dll "linux/dyncallback_s";
-    dynload_s :: #library,no_dll "linux/dynload_s";
-} else #if OS == .MACOS {
-    dyncall_s :: #library,no_dll "macos/dyncall_s";
-    dyncallback_s :: #library,no_dll "macos/dyncallback_s";
-    dynload_s :: #library,no_dll "macos/dynload_s";
-} else #if OS == .ANDROID {
-    #if CPU == .X64 {
-        dyncall_s :: #library,no_dll "android/x64/dyncall_s";
-        dyncallback_s :: #library,no_dll "android/x64/dyncallback_s";
-        dynload_s :: #library,no_dll "android/x64/dynload_s";
-    } else #if CPU == .ARM64 {
-        dyncall_s :: #library,no_dll "android/arm64/dyncall_s";
-        dyncallback_s :: #library,no_dll "android/arm64/dyncallback_s";
-        dynload_s :: #library,no_dll "android/arm64/dynload_s";
-    }
-} else #if OS == .PS5 {
-    dyncall_s :: #library,no_dll "ps5/dyncall_s";
-    dyncallback_s :: #library,no_dll "ps5/dyncallback_s";
-    dynload_s :: #library,no_dll "ps5/dynload_s";
 } else {
     #assert false;
 }
