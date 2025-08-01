@@ -6,7 +6,7 @@
     These get built automatically from type info.
 */
 
-DCaggr_lookup_table: [..] struct { info: *Type_Info; aggr: *DCaggr; };
+DCaggr_lookup_table := ([..] struct { info: *Type_Info; aggr: *DCaggr; }).{ allocator = Context_Base.default_allocator };
 
 make_DCaggr :: (info: *Type_Info) -> *DCaggr {
     if info.type == {
