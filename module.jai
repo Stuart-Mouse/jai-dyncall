@@ -188,8 +188,7 @@ begin_call :: (vm: *Dyncall_VM, procedure: Any) -> bool {
         
         dcArgPointer(vm, xx jai_proc.pointer);
         if !(jai_proc.procedure_flags & .HAS_NO_CONTEXT) { 
-            assert(context_pointer != null);
-            dcArgPointer(vm, xx context_pointer);
+            dcArgPointer(vm, xx ifx context_pointer else *context);
         }
     } else {
         proc := Any_Proc.from(procedure);
@@ -333,7 +332,6 @@ do_dyncall :: (vm: *DCCallVM, using c_call_wrapper: C_Call_Wrapper, arguments: [
     
     dcArgPointer(vm, xx procedure.pointer);
     if !(procedure.procedure_flags & .HAS_NO_CONTEXT) { 
-        assert(context_pointer != null);
         dcArgPointer(vm, xx ifx context_pointer else *context);
     }
     
