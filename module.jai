@@ -334,7 +334,7 @@ do_dyncall :: (vm: *DCCallVM, using c_call_wrapper: C_Call_Wrapper, arguments: [
     dcArgPointer(vm, xx procedure.pointer);
     if !(procedure.procedure_flags & .HAS_NO_CONTEXT) { 
         assert(context_pointer != null);
-        dcArgPointer(vm, xx context_pointer);
+        dcArgPointer(vm, xx ifx context_pointer else *context);
     }
     
     if !typecheck_arguments(procedure.proc_info, ..arguments)  return false;
@@ -662,7 +662,8 @@ push_argument_nocheck :: (vm: *DCCallVM, any: Any, jai_call := false) -> bool {
     Because we aren't baking `procedure`, we should only have one overload per type of procedure,
         not for every single procedure we wrap.
         
-    // TODO: make sure that we are properly passing struct parameters by pointer.
+    TODO: make sure that we are properly passing struct parameters by pointer.
+          I need to add some test cases for this, since I don't think I have any at the moment...
 */
 make_c_call_wrapper :: (jai_proc: $P, _context: *#Context) -> C_Call_Wrapper #modify {
     jai_proc_info := P.(*Type_Info_Procedure);
