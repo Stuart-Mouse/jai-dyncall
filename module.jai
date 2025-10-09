@@ -229,7 +229,7 @@ execute_call :: (vm: *Dyncall_VM, return_values: ..Any) -> bool {
         assert(proc != null);
         
         if proc.procedure_flags & .IS_C_CALL {
-            return_value := ifx return_values then return_values[0] else Void_Any;
+            return_value := ifx return_values then return_values[0] else VOID_ANY;
             if !execute_c_call(__vm, target.procedure.pointer, return_value, aggr)  return false;
         } else {
             for return_values  dcArgPointer(vm, it.value_pointer);
@@ -258,7 +258,7 @@ do_dyncall :: (vm: *DCCallVM, procedure: Any, arguments: [] Any, return_values: 
     
     if proc.procedure_flags & .IS_C_CALL {
         assert(proc.return_types.count <= 1); // sanity check
-        return_value := ifx return_values then return_values[0] else Void_Any;
+        return_value := ifx return_values then return_values[0] else VOID_ANY;
         
         // For a C call, we may have to start an aggr call before pushing arguments.
         ok, aggr := begin_c_call(vm, return_value.type);
